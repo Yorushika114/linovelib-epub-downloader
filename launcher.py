@@ -11,7 +11,8 @@ def _prompt(label):
 
 def _launch():
     print("循环爬取模式：输入小说编号与卷数即可连续下载；在编号处输入 q 或直接回车退出循环。")
-    print("示例：编号 3095  卷 4 ；编号 3095  卷 1,3 ；卷数输入 all 下载全部。")
+    print("示例：编号 3095  卷 4 ；编号 3095  卷 1-3,5 ；卷数输入 all 下载全部。")
+    print("默认每下一卷就合成一本（边下边出）；一次选多卷时会另外询问是否再合并成整本。")
     while True:
         print("\n" + "=" * 58)
         nid = _prompt("请输入小说编号(如 3095，q/回车退出): ")
@@ -19,7 +20,7 @@ def _launch():
             print("已退出循环。")
             return 0
 
-        vol = _prompt("请输入卷数(多个用逗号分隔，如: 4  或  1,3；全部输入 all): ")
+        vol = _prompt("请输入卷数(多个用逗号分隔，支持区间如 1-3,5；全部输入 all): ")
         if not vol:
             print("未输入卷数，已取消本次，请重新输入。")
             continue
@@ -31,7 +32,7 @@ def _launch():
         sys.stdout.flush()
 
         if vol.strip().lower() == "all":
-            argv = ["--novel", nid, "--vol", "all", "--no-interactive"]
+            argv = ["--novel", nid, "--vol", "all"]
         else:
             argv = ["--novel", nid, "--volumes", vol]
 

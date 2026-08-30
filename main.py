@@ -1,5 +1,6 @@
 import sys
 import re
+import dataclasses
 from linovelib.fetcher import Fetcher
 from linovelib.resolver import resolve_id, fetch_novel, ResolveError
 from linovelib.catalog import (parse_catalog, parse_volume_chapters,
@@ -66,6 +67,50 @@ def _volume_suffix(volumes, book_title):
     return " " + ",".join(labels)
 
 
+def _expand_volume_spec(spec):
+    """把卷选择串展开为「从 1 开始的卷位号」列表，支持逗号与 '-' 区间。
+
+    如 "1-3,5,7-9" -> [1,2,3,5,7,8,9]。空串/None -> []。去重保序；区间两端可反向(如 5-3)。
+    """
+    if not spec:
+        return []
+    out = []
+    for part in str(spec).split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part:
+            lo, hi = part.split("-", 1)
+            lo, hi = lo.strip(), hi.strip()
+            if not (lo.isdigit() and hi.isdigit()):
+                raise ValueError(f"无法解析卷号区间：{part!r}")
+            lo, hi = int(lo), int(hi)
+            if lo > hi:
+                lo, hi = hi, lo
+            out.extend(range(lo, hi + 1))
+        else:
+            if not part.isdigit():
+                raise ValueError(f"无法解析卷号：{part!r}")
+            out.append(int(part))
+    seen = set()
+    res = []
+    for x in out:
+        if x in seen:
+            continue
+        seen.add(x)
+        res.append(x)
+    return res
+
+
+def _novel_subset(novel, volumes, marker):
+    """构造一本只含给定卷的子 Novel，供按卷单独生成 EPUB 用。
+
+    marker 进入 identifier，使同一小说的多份 EPUB 各自唯一（避免阅读器/calibre 当同书去重）。
+    """
+    return dataclasses.replace(novel, volumes=list(volumes),
+                               id=f"{novel.id}-{marker}")
+
+
 def main(argv=None):
     args = build_parsed_args(argv)
     if not args.novel and not args.name:
@@ -99,9 +144,13 @@ def main(argv=None):
         print("未能从目录页解析到任何卷/章节，已停止。")
         return 1
 
-    # 选卷
+    # 选卷（支持逗号与 '-' 区间，如 "1-3,5"）
     if args.volumes:
-        selected = [int(x) for x in args.volumes.split(",") if x.strip()]
+        try:
+            selected = _expand_volume_spec(args.volumes)
+        except ValueError as e:
+            print(e)
+            return 2
         try:
             volumes = choose_volumes(volumes, selected)
         except ValueError as e:
@@ -112,7 +161,11 @@ def main(argv=None):
     elif args.no_interactive:
         pass
     else:
-        sel = _interactive_choose(volumes)
+        try:
+            sel = _interactive_choose(volumes)
+        except ValueError as e:
+            print(e)
+            return 2
         if sel != "all":
             try:
                 volumes = choose_volumes(volumes, sel)
@@ -146,30 +199,15 @@ def main(argv=None):
         except Exception:
             pass
 
-    tmpdir = CACHE_DIR
-    tmpdir.mkdir(exist_ok=True)
-    failed = []
-    total_ch = sum(len(v.chapters) for v in volumes)
-    done = 0
-    for vol in volumes:
-        for ch in vol.chapters:
-            done += 1
-            try:
-                download_chapter(ch, nid, fetcher, tmpdir)
-                print(f"  [OK] 章节 {done}/{total_ch} 完成：{ch.title if ch.title else ch.id}")
-            except Exception as e:
-                failed.append((ch.id, ch.title))
-                print(f"  [ERR] 章节 {done}/{total_ch} 失败：{ch.title or ch.id}（{e}）")
-
     # 封面：优先用所选第一卷的独立封面（卷页 og:image，如 img3.readpai.com/cover/
     # {nid}/{imageid}.jpg），因为它才是真正的卷封面；小说页的 og:image 常是
     # booklist 缩略图（xxx s.jpg），用作封面会张冠李戴。拿不到时退回小说页封面。
+    # 封面要在逐卷合成前拿到，这样每下一卷都能立即带着封面合成该卷。
     cover_url = ""
     if volumes and volumes[0].cover_url:
         cover_url = volumes[0].cover_url
     elif novel.cover_url:
         cover_url = novel.cover_url
-
     cover_data = None
     if cover_url:
         try:
@@ -181,24 +219,68 @@ def main(argv=None):
 
     novel.volumes = volumes
 
-    # 默认输出到项目目录下的 download/<小说标题>/ 子文件夹（相对路径），一个小说
-    # 一个文件夹归类；显式指定 --out 时尊重用户填写的路径。
+    # 输出策略：默认【每下一卷就立即合成该卷】(边下边出，某卷卡住/失败不影响已完成的卷)。
+    # 多卷时最终再额外询问是否整本合并(--merge 强制合并；--no-interactive 不询问仅逐卷)。
+    # --out 给了单一目标文件时不逐卷合成，全部下完再合成一个(单卷=该卷，多卷=合并本)。
+    def _ask_merge():
+        try:
+            ans = input("检测到多卷。是否额外生成一份「整本合并」的 EPUB？(y/N): ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            return False
+        return ans in ("y", "yes")
+
+    written = []
+
+    def _build(sub, out):
+        try:
+            p = build_epub(sub, out, cover_data)
+            written.append(p)
+            print(f"已生成：{p}")
+        except Exception as e:
+            print(f"生成 EPUB 失败：{out}（{e}）")
+
+    tmpdir = CACHE_DIR
+    tmpdir.mkdir(exist_ok=True)
+    failed = []
+    title_safe = _sanitize(novel.title)
+    # 默认输出目录 download/<小说标题>/；--out 时 folder 为 None（不逐卷合成）。
+    folder = None if args.out else (DEFAULT_DOWNLOAD_DIR / title_safe)
+    if folder is not None:
+        folder.mkdir(parents=True, exist_ok=True)
+
+    for vi, vol in enumerate(volumes, start=1):
+        # 进度按【当前卷】显示：只显示本卷内的 X/Y（每卷各自计数），
+        # 不再显示 1/316 这种跨卷总数——那样看不出进度发生在哪一卷。
+        vol_label = _volume_suffix([vol], novel.title).strip() or f"第{vi}卷"
+        vol_total = len(vol.chapters)
+        for ci, ch in enumerate(vol.chapters, start=1):
+            try:
+                download_chapter(ch, nid, fetcher, tmpdir)
+                print(f"  [OK] {vol_label} 章节 {ci}/{vol_total} 完成：{ch.title if ch.title else ch.id}")
+            except Exception as e:
+                failed.append((ch.id, ch.title))
+                print(f"  [ERR] {vol_label} 章节 {ci}/{vol_total} 失败：{ch.title or ch.id}（{e}）")
+        if folder is not None:
+            # 该卷已下完 → 立即合成该卷 EPUB（不等其余卷）。
+            out = folder / f"{title_safe}{_volume_suffix([vol], novel.title)}.epub"
+            _build(_novel_subset(novel, [vol], f"vol{vi}"), out)
+
+    # 单文件 --out：全部下完再合成一个（单卷=该卷，多卷=合并本；尊重用户指定单一目标文件）。
     if args.out:
-        out = args.out
-    else:
-        title_safe = _sanitize(novel.title)
-        folder = DEFAULT_DOWNLOAD_DIR / title_safe
-        folder.mkdir(parents=True, exist_ok=True)  # build_epub 的临时文件和最终
-        # EPUB 都写在输出目录，里所以必须先建好。
-        # 用「爬取到的书名 + 卷数」命名（如「败北女角太多了！ 第4卷.epub」）；不选卷时
-        # 回退为仅书名，卷数也会随所选卷自动拼接（单卷/连续区间/离散）。
-        out = folder / f"{title_safe}{_volume_suffix(volumes, novel.title)}.epub"
-    try:
-        written = build_epub(novel, out, cover_data)
-    except Exception as e:
-        print(f"生成 EPUB 失败：{e}")
+        sub = _novel_subset(novel, volumes, "book" if len(volumes) == 1 else "merged")
+        _build(sub, args.out)
+
+    # 多卷 & 默认目录：最后询问是否额外生成合并本（逐卷版保留；`y` 再补一份整本）。
+    if folder is not None and len(volumes) > 1:
+        merge = args.merge
+        if not merge and not args.no_interactive:
+            merge = _ask_merge()
+        if merge:
+            out = folder / f"{title_safe}{_volume_suffix(volumes, novel.title)}.epub"
+            _build(_novel_subset(novel, volumes, "merged"), out)
+
+    if not written:
         return 1
-    print(f"已生成：{written}")
 
     if failed:
         print("以下章节未能下载：")
@@ -211,10 +293,10 @@ def _interactive_choose(volumes):
     print("可用卷：")
     for i, v in enumerate(volumes, start=1):
         print(f"  [{i}] {v.title}  （{len(v.chapters)} 章）")
-    raw = input("输入要下载的卷号，逗号分隔；输入 all 下载全部：[all] ").strip()
+    raw = input("输入要下载的卷号，逗号分隔（支持 '1-3,5' 区间）；输入 all 下载全部：[all] ").strip()
     if not raw or raw.lower() == "all":
         return "all"
-    return [int(x) for x in raw.split(",") if x.strip()]
+    return _expand_volume_spec(raw)
 
 
 if __name__ == "__main__":
