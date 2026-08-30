@@ -1,0 +1,9 @@
+requests>=2.31
+beautifulsoup4>=4.12
+lxml>=5.0
+Pillow>=10.0
+ebooklib>=0.18
+pytest>=7.4
+# 正文抓取用真实浏览器渲染（linovelib 对纯请求返回打乱的假内容），
+# RenderFetcher 复用系统 Edge/Chrome，无需单独下载浏览器。
+playwright>=1.44

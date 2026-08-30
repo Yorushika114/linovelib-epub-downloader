@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Generated content and download cache
+_tmp_dl/
+download/
+*.epub
+
+# Local diagnostics and editor files
+tmp_*
+*.log
+.vscode/
+.idea/
