@@ -13,6 +13,49 @@
 python -m pip install -r requirements.txt
 ```
 
+## 操作设置（Windows）
+
+### 第一次使用
+
+1. 打开 PowerShell 或命令提示符，进入项目目录：
+
+   ```powershell
+   cd "轻小说下载爬虫"
+   ```
+
+2. 安装依赖（只需首次执行，或依赖更新后重新执行）：
+
+   ```powershell
+   python -m pip install -r requirements.txt
+   ```
+
+3. 选择一种启动方式：
+
+   - **交互式（推荐）**：双击 `download.bat`，或在终端执行 `python launcher.py`。
+   - **命令行**：在终端直接执行 `python main.py` 并附加参数，适合固定配置或批量运行。
+
+### 交互式设置
+
+启动 `launcher.py` 后，按提示依次填写：
+
+1. **小说编号**：取小说页面地址中的编号。例如页面地址是
+   `https://www.linovelib.com/novel/3095/181030.html`，应输入 `3095`。
+2. **卷数**：输入目录显示的卷序号，例如 `4`；多个卷用英文逗号分隔，例如 `1,3,5`；输入 `all` 下载全部卷。
+3. 每个章节完成时会显示进度；本次任务结束后会回到编号输入处，可继续下载另一部小说。输入 `q` 或直接回车退出。
+
+默认生成的 EPUB 位于项目根目录下的 `download/<小说名>/`。缓存位于 `_tmp_dl/`，两者都不上传到 GitHub。
+
+### 常用设置速查
+
+| 目标 | 示例 | 作用 |
+|---|---|---|
+| 下载一卷 | `python main.py --novel 3095 --volumes 4` | 下载目录中第 4 个卷选项 |
+| 下载多卷 | `python main.py --novel 3095 --volumes 1,3,5` | 仅下载指定卷，逗号之间不加空格 |
+| 下载全部 | `python main.py --novel 3095 --vol all` | 下载全部目录卷 |
+| 自定义文件位置 | `python main.py --novel 3095 --volumes 4 --out output/book.epub` | 输出到相对项目目录的 `output/` 下 |
+| 降低请求频率 | `python main.py --novel 3095 --volumes 4 --delay 2` | 每次请求至少间隔 2 秒，网络受限时建议使用 |
+| 不弹出卷选择 | `python main.py --novel 3095 --vol all --no-interactive` | 适合脚本自动执行 |
+
 ## 用法
 
 ```bash
@@ -37,7 +80,7 @@ python main.py --novel 3095
 | `--name` | 小说书名（先走站点搜索，失败回退到编号） |
 | `--volumes` | 选择卷（从 1 开始，逗号分隔，如 `1,3,5`） |
 | `--vol all` | 下载全部卷 |
-| `--out` | 输出 `.epub` 路径，默认 `<书名>.epub` |
+| `--out` | 输出 `.epub` 路径；未传入时写入项目根目录的 `download/<书名>/` |
 | `--delay` | 请求间隔秒，默认 `0.4`，慢速限流设置 |
 | `--no-interactive` | 未指定 `--vol/--volumes` 时不弹交互、下载全部 |
 
