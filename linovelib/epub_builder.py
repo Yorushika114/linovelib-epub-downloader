@@ -5,6 +5,7 @@ import tempfile
 import time
 import zipfile
 from ebooklib import epub
+from .paths import CACHE_DIR
 
 # 轻小说版式：正文两端对齐、首行缩进两字、行距舒适、章节标题分页居中、
 # 插图/封面居中等比缩放。目标品质对齐市面上规范 EPUB（如 calibre 生成版）。
@@ -117,8 +118,11 @@ def build_epub(novel, out_path, cover_data=None):
     # 先由 ebooklib 写出（保证 OPF/NCX/Nav/mimetype 正确），再对每个 XHTML
     # 注入 lang=zh-CN、<title> 与样式表链接，并包住封面图。ebooklib 的
     # EpubHtml 只会生成 `lang="en"` 与空 `<head/>`，无法直接控制 head。
-    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(os.path.abspath(out_path)) or ".",
-                               suffix=".epub.tmp")
+    # 临时文件写到项目缓存目录 _tmp_dl（已 gitignore），避免在 download/ 下残留
+    # .epub.tmp。该目录与输出同盘，_finalize_xhtml 跨目录读取后写入目标文件没有原子性
+    # 依赖，安全；即使中断留下残留，也在缓存目录而不会污染最终输出目录。
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=str(CACHE_DIR), suffix=".epub.tmp")
     os.close(fd)
     try:
         # WinError 32（PermissionError）：Windows Defender/杀软会在新建的 .epub.tmp
@@ -142,8 +146,19 @@ def build_epub(novel, out_path, cover_data=None):
             print(f"目标文件已被其他程序占用（可能是阅读器正在打开这个 epub），已另存为：{dest}")
         return dest
     finally:
-        if os.path.exists(tmp):
-            os.remove(tmp)
+        # 尽量删除临时文件；Windows Defender/杀软可能短暂锁定刚写好的 .epub.tmp
+        # 导致删除时 PermissionError，重试几次再放弃（残留在缓存目录里，无害）。
+        for _ in range(6):
+            try:
+                if os.path.exists(tmp):
+                    os.remove(tmp)
+                break
+            except PermissionError:
+                if _ == 5:
+                    break
+                time.sleep(0.25)
+            except Exception:
+                break
 
 
 def _alternate_path(path):

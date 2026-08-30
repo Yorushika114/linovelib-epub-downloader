@@ -111,6 +111,22 @@ def _novel_subset(novel, volumes, marker):
                                id=f"{novel.id}-{marker}")
 
 
+def _sweep_temp(folder):
+    """删除目录下残留的中断临时文件 *.epub.tmp（如用户强行中断导致的残留）。
+
+    正常流程 build_epub 会在 finally 里删掉临时文件；只有被硬中断/杀软锁住时才可能留
+    在原地。清扫它们仅针对旧残留，不碰正在使用中的文件（构建由本函数调用前尚未开始）。
+    """
+    try:
+        for stale in folder.glob("*.epub.tmp"):
+            try:
+                stale.unlink()
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
 def main(argv=None):
     args = build_parsed_args(argv)
     if not args.novel and not args.name:
@@ -199,23 +215,29 @@ def main(argv=None):
         except Exception:
             pass
 
-    # 封面：优先用所选第一卷的独立封面（卷页 og:image，如 img3.readpai.com/cover/
-    # {nid}/{imageid}.jpg），因为它才是真正的卷封面；小说页的 og:image 常是
-    # booklist 缩略图（xxx s.jpg），用作封面会张冠李戴。拿不到时退回小说页封面。
-    # 封面要在逐卷合成前拿到，这样每下一卷都能立即带着封面合成该卷。
-    cover_url = ""
-    if volumes and volumes[0].cover_url:
-        cover_url = volumes[0].cover_url
-    elif novel.cover_url:
-        cover_url = novel.cover_url
-    cover_data = None
-    if cover_url:
+    # 封面：每卷用自己的【卷页 og:image】封面（cover/{nid}/{imageid}.jpg），这才是该卷
+    # 真正的封面；小说页 og:image 常是 booklist 缩略图（xxx s.jpg），只在拿不到卷封面时
+    # 兜底。逐卷合成各带本卷封面；整本合并用第一卷封面。按 URL 缓存避免重复下载。
+    cover_cache = {}
+
+    def _cover_bytes(url):
+        if not url:
+            return None
+        if url in cover_cache:
+            return cover_cache[url]
+        data = None
         try:
-            cover_data = fetcher.get_bytes(cover_url)
-            if not fetcher.is_valid_image(cover_data):
-                cover_data = None
+            d = fetcher.get_bytes(url)
+            if fetcher.is_valid_image(d):
+                data = d
         except Exception:
-            cover_data = None
+            data = None
+        cover_cache[url] = data
+        return data
+
+    def _vol_cover(vol):
+        # 该卷卷封面优先；取不到再用小说页封面兜底。
+        return _cover_bytes(vol.cover_url) or _cover_bytes(novel.cover_url)
 
     novel.volumes = volumes
 
@@ -231,9 +253,9 @@ def main(argv=None):
 
     written = []
 
-    def _build(sub, out):
+    def _build(sub, out, cover):
         try:
-            p = build_epub(sub, out, cover_data)
+            p = build_epub(sub, out, cover)
             written.append(p)
             print(f"已生成：{p}")
         except Exception as e:
@@ -241,12 +263,14 @@ def main(argv=None):
 
     tmpdir = CACHE_DIR
     tmpdir.mkdir(exist_ok=True)
+    _sweep_temp(CACHE_DIR)  # 清掉被强行中断而残留的 .epub.tmp
     failed = []
     title_safe = _sanitize(novel.title)
     # 默认输出目录 download/<小说标题>/；--out 时 folder 为 None（不逐卷合成）。
     folder = None if args.out else (DEFAULT_DOWNLOAD_DIR / title_safe)
     if folder is not None:
         folder.mkdir(parents=True, exist_ok=True)
+        _sweep_temp(folder)
 
     for vi, vol in enumerate(volumes, start=1):
         # 进度按【当前卷】显示：只显示本卷内的 X/Y（每卷各自计数），
@@ -261,14 +285,14 @@ def main(argv=None):
                 failed.append((ch.id, ch.title))
                 print(f"  [ERR] {vol_label} 章节 {ci}/{vol_total} 失败：{ch.title or ch.id}（{e}）")
         if folder is not None:
-            # 该卷已下完 → 立即合成该卷 EPUB（不等其余卷）。
+            # 该卷已下完 → 立即合成该卷 EPUB（不等其余卷），封面用该卷自己的。
             out = folder / f"{title_safe}{_volume_suffix([vol], novel.title)}.epub"
-            _build(_novel_subset(novel, [vol], f"vol{vi}"), out)
+            _build(_novel_subset(novel, [vol], f"vol{vi}"), out, _vol_cover(vol))
 
     # 单文件 --out：全部下完再合成一个（单卷=该卷，多卷=合并本；尊重用户指定单一目标文件）。
     if args.out:
         sub = _novel_subset(novel, volumes, "book" if len(volumes) == 1 else "merged")
-        _build(sub, args.out)
+        _build(sub, args.out, _vol_cover(volumes[0]) if volumes else None)
 
     # 多卷 & 默认目录：最后询问是否额外生成合并本（逐卷版保留；`y` 再补一份整本）。
     if folder is not None and len(volumes) > 1:
@@ -277,7 +301,8 @@ def main(argv=None):
             merge = _ask_merge()
         if merge:
             out = folder / f"{title_safe}{_volume_suffix(volumes, novel.title)}.epub"
-            _build(_novel_subset(novel, volumes, "merged"), out)
+            _build(_novel_subset(novel, volumes, "merged"), out,
+                   _vol_cover(volumes[0]) if volumes else None)
 
     if not written:
         return 1
