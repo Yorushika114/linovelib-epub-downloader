@@ -19,7 +19,7 @@
         <Button Style="{StaticResource RailButton}" Content="⌕" ToolTip="搜索"/>
         <Button Style="{StaticResource RailButton}" Content="☆" ToolTip="收藏"/>
         <Button Style="{StaticResource RailButton}" Content="☷" ToolTip="任务"/>
-        <Button Style="{StaticResource RailButton}" Content="⚙" ToolTip="设置" Margin="0,auto,0,8"/>
+        <Button Style="{StaticResource RailButton}" Content="⚙" ToolTip="设置" Margin="0,8"/>
       </StackPanel>
     </Border>
 
