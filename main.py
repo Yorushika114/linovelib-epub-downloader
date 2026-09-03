@@ -2,7 +2,7 @@ import sys
 import re
 import pathlib
 import dataclasses
-from linovelib.fetcher import Fetcher
+from linovelib.fetcher import Fetcher, CloudflareBlockedError
 from linovelib.resolver import resolve_id, fetch_novel, ResolveError
 from linovelib.catalog import (parse_catalog, parse_volume_chapters,
                                parse_volume_page)
@@ -11,6 +11,7 @@ from linovelib.epub_builder import build_epub
 from linovelib.cli import build_parsed_args, choose_volumes
 from linovelib.events import DownloadEvent, emit
 from linovelib.paths import CACHE_DIR, DEFAULT_DOWNLOAD_DIR
+from linovelib import __version__
 
 # 中文 Windows 的 stdout/stderr 默认是 GBK：章节标题或内容里一旦出现 GBK 编不了的字符
 # （如 ♡、✓、→ 等）就会抛 UnicodeEncodeError 闪退，而且不知道会在哪一章触发。
@@ -113,6 +114,22 @@ def _novel_subset(novel, volumes, marker):
                                id=f"{novel.id}-{marker}")
 
 
+def _cloudflare_block_msg(nid, detail=""):
+    """把「整本小说被站点 Cloudflare 防火墙封禁」转成面向用户的明确提示。
+
+    linovelib 对个别编号（多为被要求下架/限制的主流授权书，如 无职转生 主篇 id=2013）
+    的 /novel/{nid}/ 全部页面统一返回 403 Attention Required：脚本、浏览器渲染、带
+    cf_clearance 的同会话访问都拿不到。它不是网络波动，换头/重试/加等待无解，只能让用户
+    换一个未被屏蔽的编号或卷。这里把原始「403 Client Error」异常翻译成可行动的说明。
+    """
+    lines = [
+        f"这本小说(id={nid})的页面被站点防火墙拦下了（{detail or '403 Forbidden'}）。",
+        "它对该编号的所有页面（落地页/目录页/卷页/章节页）都会返回 “Attention Required”。",
+        "这是站点侧针对特定作品的封禁，脚本重试或换浏览器都无法绕过——只能换书下载。",
+    ]
+    return "\n".join(lines)
+
+
 def _sweep_temp(folder):
     """删除目录下残留的中断临时文件 *.epub.tmp（如用户强行中断导致的残留）。
 
@@ -129,7 +146,35 @@ def _sweep_temp(folder):
         pass
 
 
+def _resolve_identifier(identifier, fetcher=None):
+    """把编号或书名解析为【确定的小说编号】。
+
+    - 纯编号直接返回，不启动浏览器；书名用本站浏览器搜索解析（多候选时让用户选择，
+      交互发生在解析阶段，从而保证「书名先筛选、编号直达卷数」在解析后才轮到选卷）。
+    - 无 playwright 时 route 站外引擎兜底（resolve_id 内部自行 try/except）。
+    - 解析失败（未找到/站点拦截等）抛出 ResolveError，由调用方决定如何呈现。
+    供 CLI 与交互启动器共用，保证两条入口的顺序一致。
+    """
+    identifier = (identifier or "").strip()
+    if identifier.isdigit():
+        return identifier
+    if fetcher is None:
+        fetcher = Fetcher()
+    browser = None
+    try:
+        from linovelib.render import RenderFetcher
+        browser = RenderFetcher(headless=True)
+    except Exception:
+        browser = None
+    try:
+        return resolve_id(identifier, fetcher, browser=browser)
+    finally:
+        if browser is not None:
+            browser.close()
+
+
 def main(argv=None, *, observer=None, cancel_event=None):
+    print(f"轻小说下载器 v{__version__}")
     args = build_parsed_args(argv)
 
     def _cancel_if_requested():
@@ -154,13 +199,24 @@ def main(argv=None, *, observer=None, cancel_event=None):
     # 卷页(vol_XXX.html)偶发慢响应，默认 timeout=15 会频繁超时浪费重试；提到 30s
     # 让慢但正常的响应直接成功（页面 26.8s 成功过）。章节页都快，30s 不影响它们。
     fetcher = Fetcher(delay=args.delay, retries=8, timeout=30)
+
+    # 书名→编号：本站 /S6/ 只对真实浏览器返回结果（脚本 requests 永久空壳；站外搜索引擎
+    # 限流/索引缺失/放水 site: 不可靠）。所以按书名解析时用 RenderFetcher 渲染本站搜索——
+    # 这是自站搜索、参考无关，绝非用参考书。纯编号直接透传，不启动浏览器；无 playwright 时
+    # 退回站外引擎兜底（resolve_id 内部自行 try/except）。_resolve_identifier 封装该逻辑，
+    # 供 CLI 与交互启动器共用，保证「书名先筛选、编号直达卷数」的顺序一致。
+    identifier = args.novel or args.name
     try:
-        nid = resolve_id(args.novel or args.name, fetcher)
+        nid = _resolve_identifier(identifier, fetcher)
     except ResolveError as e:
         print(e)
         return 2
 
-    novel = fetch_novel(nid, fetcher)
+    try:
+        novel = fetch_novel(nid, fetcher)
+    except CloudflareBlockedError as e:
+        print(_cloudflare_block_msg(nid, str(e)))
+        return 1
     print(f"小说：{novel.title}  作者：{novel.author}  (id={nid})")
 
     # 正文按【参考无关】方式还原真序：纯 requests 抓每页 #TextContent，复用站点/社区公开的
@@ -172,7 +228,11 @@ def main(argv=None, *, observer=None, cancel_event=None):
     print("正文顺序：纯 requests + Fisher-Yates 反洗牌（参考无关），按文本去重克隆段。")
     print("提示：参考书不参与下载；如需最终顺序校正，请用 reorder_epub（显式 --reference，仅外部核对用）。")
 
-    catalog_html = fetcher.get_html(f"https://www.linovelib.com/novel/{nid}/catalog")
+    try:
+        catalog_html = fetcher.get_html(f"https://www.linovelib.com/novel/{nid}/catalog")
+    except CloudflareBlockedError as e:
+        print(_cloudflare_block_msg(nid, str(e)))
+        return 1
     volumes = parse_catalog(catalog_html, nid)
     if not volumes:
         print("未能从目录页解析到任何卷/章节，已停止。")

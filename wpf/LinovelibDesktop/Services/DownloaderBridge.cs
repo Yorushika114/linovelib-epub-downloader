@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Text.Json;
 using LinovelibDesktop.Models;
 
@@ -57,6 +58,42 @@ public sealed class DownloaderBridge
             _process.StandardInput.WriteLine("cancel");
             _process.StandardInput.Flush();
         }
+    }
+
+    /// <summary>仅按书名解析候选列表（不下载），供 WPF 先做书名筛选，再进入卷数/下载。</summary>
+    public async Task<List<ResolveResultDto>> ResolveAsync(string text)
+    {
+        var root = ProjectPaths.FindRoot();
+        var startInfo = new ProcessStartInfo(ProjectPaths.FindPython(root))
+        {
+            WorkingDirectory = root,
+            UseShellExecute = false,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true,
+        };
+        startInfo.ArgumentList.Add(Path.Combine(root, "wpf_bridge.py"));
+        startInfo.ArgumentList.Add("--resolve");
+        startInfo.ArgumentList.Add(text);
+
+        using var process = new Process { StartInfo = startInfo };
+        if (!process.Start()) throw new InvalidOperationException("无法启动 Python 搜索桥接进程。");
+
+        var stderrTask = process.StandardError.ReadToEndAsync();
+        var results = new List<ResolveResultDto>();
+        while (await process.StandardOutput.ReadLineAsync() is { } line)
+        {
+            try
+            {
+                var item = JsonSerializer.Deserialize<ResolveResultDto>(line, JsonOptions);
+                if (item is not null) results.Add(item);
+            }
+            catch (JsonException) { }
+        }
+        await process.WaitForExitAsync();
+        await stderrTask;
+        return results.Where(r => r.Kind == "search_hit").ToList();
     }
 
     private static async Task ReadEventsAsync(Process process, Action<DownloadEventDto> onEvent, Action<string> onLog)

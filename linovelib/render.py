@@ -12,6 +12,7 @@ linovelib 会对「非浏览器请求」返回降级/打乱的内容：段数变
 从而可以原样替换进 downloader / main，而无需改动那些模块。
 """
 
+from urllib.parse import quote
 from .fetcher import Fetcher
 
 # 渲染后清除正文里 display:none 的重复/克隆段（防爬注入的噪声），
@@ -133,6 +134,27 @@ class RenderFetcher:
         page.wait_for_timeout(int(self.wait_after * 1000))  # 再静置，留一点给懒加载图
         # 去掉隐藏克隆段，保证只保留用户可见的真实段落。
         page.evaluate(_STRIP_HIDDEN)
+        return page.content()
+
+    def search_html(self, name, search_url=None):
+        """渲染站点搜索结果页（书名→结果），返回序列化后的结果页 HTML。
+
+        站点 /S6/?searchkey= 只会把结果返回给真实浏览器：对脚本化 requests 吐空壳，
+        且未在本会话访问过首页（拿到 Cloudflare cookie）时，搜索页也常是空 <body></body>。
+        所以必须先到首页暖机、再跳转搜索。
+
+        导航必须用 networkidle 等待（让客户端 JS 把结果请求发出并落地），且【不要】再追加
+        额外 sleep 或 wait_for_selector——实测一加等待就拿回空壳。返回页含 div.search-result-list
+        结果项，由 resolver.parse_search_results 解析（本站自站搜索，参考无关）。
+        """
+        page = self._ensure_page()
+        try:
+            page.goto("https://www.linovelib.com/",
+                      wait_until="networkidle", timeout=self.timeout)
+        except Exception:
+            pass
+        url = search_url or ("https://www.linovelib.com/S6/?searchkey=" + quote(name))
+        page.goto(url, wait_until="networkidle", timeout=self.timeout)
         return page.content()
 
     def get_bytes(self, url, **kw):

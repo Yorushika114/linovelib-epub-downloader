@@ -1,6 +1,10 @@
 using System.Collections.ObjectModel;
 using System.Globalization;
+using System.Linq;
 using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Input;
+using System.Windows.Media;
 using Microsoft.Win32;
 using LinovelibDesktop.Models;
 using LinovelibDesktop.Services;
@@ -12,6 +16,7 @@ public partial class MainWindow : Window
     private readonly DownloaderBridge _bridge = new();
     private readonly ObservableCollection<ChapterRow> _rows = new();
     private readonly Dictionary<string, ChapterRow> _rowsById = new();
+    private readonly List<ResolveResultDto> _candidates = new();
     private string _lastLogLine = "";
 
     public MainWindow()
@@ -22,12 +27,16 @@ public partial class MainWindow : Window
 
     private async void StartButton_Click(object sender, RoutedEventArgs e)
     {
-        if (string.IsNullOrWhiteSpace(NovelIdBox.Text)) { Report("请输入小说编号或书名。"); return; }
+        var idText = NovelIdBox.Text.Trim();
+        if (idText.Length == 0) { Report("请输入小说编号或书名。"); return; }
+        // 书名必须先点击「搜索」解析出编号并选定，否则禁止直接下载（保证「书名先筛选→再卷数」）。
+        if (!idText.All(char.IsDigit)) { Report("书名需先解析为编号：请点击『搜索』并选定候选后再开始下载。"); return; }
         if (!double.TryParse(DelayBox.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out var delay) || delay < 0) { Report("请求间隔必须是大于等于 0 的数字。"); return; }
 
         _rows.Clear(); _rowsById.Clear(); _lastLogLine = ""; LogBox.Clear(); Progress.Value = 0; Progress.Maximum = 1; ProgressText.Text = "0 / 0 章";
+        SetCentralMode(selection: false);
         StartButton.IsEnabled = false; CancelButton.IsEnabled = true; StatusText.Text = "正在启动下载任务…";
-        var request = new DownloadRequest(NovelIdBox.Text.Trim(), string.IsNullOrWhiteSpace(VolumesBox.Text) ? "all" : VolumesBox.Text.Trim(), delay.ToString(CultureInfo.InvariantCulture), OutputBox.Text.Trim());
+        var request = new DownloadRequest(idText, string.IsNullOrWhiteSpace(VolumesBox.Text) ? "all" : VolumesBox.Text.Trim(), delay.ToString(CultureInfo.InvariantCulture), OutputBox.Text.Trim());
         try
         {
             var exitCode = await _bridge.StartAsync(request, item => Dispatcher.Invoke(() => ApplyEvent(item)), line => Dispatcher.Invoke(() => AppendLog(line)));
@@ -39,6 +48,90 @@ public partial class MainWindow : Window
 
     private void CancelButton_Click(object sender, RoutedEventArgs e) { _bridge.RequestCancel(); CancelButton.IsEnabled = false; StatusText.Text = "将在当前章节完成后安全取消。"; AppendLog("已请求安全取消。"); }
     private void ChooseOutput_Click(object sender, RoutedEventArgs e) { var dialog = new SaveFileDialog { Filter = "EPUB 文件|*.epub", DefaultExt = ".epub" }; if (dialog.ShowDialog(this) == true) OutputBox.Text = dialog.FileName; }
+
+    private async void SearchButton_Click(object sender, RoutedEventArgs e)
+    {
+        var text = NovelIdBox.Text.Trim();
+        if (text.Length == 0) { Report("请输入小说编号或书名。"); return; }
+        if (text.All(char.IsDigit)) { Report("已是编号，无需搜索；请直接设置卷号并点击开始下载。"); return; }
+
+        SearchButton.IsEnabled = false; StartButton.IsEnabled = false;
+        try
+        {
+            StatusText.Text = $"正在按书名搜索『{text}』…";
+            var results = await _bridge.ResolveAsync(text);
+            _candidates.Clear();
+            _candidates.AddRange(results);
+
+            if (_candidates.Count == 0)
+            {
+                SetCentralMode(selection: false);
+                Report($"未找到名为『{text}』的小说，请改用编号。");
+                return;
+            }
+            if (_candidates.Count == 1)
+            {
+                SetCentralMode(selection: false);
+                var only = _candidates[0];
+                NovelIdBox.Text = only.Id;
+                Report($"已选定：{only.Title}（id={only.Id}）；请设置卷号后开始下载。");
+                return;
+            }
+            // 书目与候选精确吻合：等同 CLI 的自动选取，无需再让用户筛选。
+            var exactIndex = _candidates.FindIndex(c => c.Exact);
+            if (exactIndex >= 0)
+            {
+                SetCentralMode(selection: false);
+                var hit = _candidates[exactIndex];
+                NovelIdBox.Text = hit.Id;
+                Report($"已选定：{hit.Title}（id={hit.Id}）；请设置卷号后开始下载。");
+                return;
+            }
+            // 无精确吻合：在主内容区列出候选让用户筛选，确定后才进入卷数/下载。
+            CandidateList.ItemsSource = _candidates;
+            CandidateList.SelectedIndex = -1;
+            SetCentralMode(selection: true);
+            Report($"找到 {_candidates.Count} 个候选，请在上方列表中选择书名。");
+        }
+        catch (Exception ex) { Report(ex.Message); }
+        finally { SearchButton.IsEnabled = true; StartButton.IsEnabled = true; }
+    }
+
+    private void CandidateList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (CandidateList.SelectedItem is not ResolveResultDto c) return;
+        NovelIdBox.Text = c.Id;
+        SetCentralMode(selection: false);
+        Report($"已选定：{c.Title}（id={c.Id}）；请设置卷号后开始下载。");
+    }
+
+    /// <summary>切换主内容区：true=展示书名候选列表供选择；false=展示章节下载进度表。</summary>
+    private void SetCentralMode(bool selection)
+    {
+        CandidateList.Visibility = selection ? Visibility.Visible : Visibility.Collapsed;
+        ChapterGrid.Visibility = selection ? Visibility.Collapsed : Visibility.Visible;
+    }
+
+    /// <summary>DataGrid 默认滚轮一次跳 3 行，改为每次只滚动一行（逐行平滑滚）。</summary>
+    private void DataGrid_SmoothWheel(object sender, MouseWheelEventArgs e)
+    {
+        if (sender is DependencyObject d && FindVisualChildScrollViewer(d) is { } sv)
+        {
+            if (e.Delta > 0) sv.LineUp(); else sv.LineDown();
+            e.Handled = true;
+        }
+    }
+
+    private static ScrollViewer? FindVisualChildScrollViewer(DependencyObject root)
+    {
+        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+        {
+            var child = VisualTreeHelper.GetChild(root, i);
+            if (child is ScrollViewer sv) return sv;
+            if (FindVisualChildScrollViewer(child) is { } nested) return nested;
+        }
+        return null;
+    }
 
     private void ApplyEvent(DownloadEventDto item)
     {
