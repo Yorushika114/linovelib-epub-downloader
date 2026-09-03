@@ -3,6 +3,10 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 
+# .NET build output
+**/bin/
+**/obj/
+
 # Generated content and download cache
 _tmp_dl/
 download/
