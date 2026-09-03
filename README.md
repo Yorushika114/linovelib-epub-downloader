@@ -32,6 +32,7 @@ python -m pip install -r requirements.txt
 3. 选择一种启动方式：
 
    - **交互式（推荐）**：双击 `download.bat`，或在终端执行 `python launcher.py`。
+    - **Windows WPF 图形界面**：双击 `start_wpf_ui.bat`。首次启动会构建本地 WPF 程序；界面会显示实际待下载章节、进度和安全取消状态。
    - **命令行**：在终端直接执行 `python main.py` 并附加参数，适合固定配置或批量运行。
 
 ### 交互式设置
@@ -44,6 +45,12 @@ python -m pip install -r requirements.txt
 3. 每个章节完成时会显示进度；本次任务结束后会回到编号输入处，可继续下载另一部小说。输入 `q` 或直接回车退出。
 
 默认生成的 EPUB 位于项目根目录下的 `download/<小说名>/`。缓存位于 `_tmp_dl/`，两者都不上传到 GitHub。
+
+### Windows WPF 图形界面
+
+双击项目根目录的 `start_wpf_ui.bat` 启动桌面界面。它会检查 .NET 8 SDK、构建 WPF 程序后独立打开窗口；若窗口已经打开，则会直接激活现有窗口而不会重复构建。
+
+界面默认下载全部卷；可把“卷号”改为 `1-3,5` 等范围。开始后，表格会列出未生成 EPUB 的剩余章节，并实时标为“等待中 / 下载中 / 已完成 / 失败”。点击“安全取消”会在准备阶段或当前章节边界停止，不会强制终止 Python。
 
 ### 常用设置速查
 
