@@ -9,6 +9,7 @@ from linovelib.catalog import (parse_catalog, parse_volume_chapters,
 from linovelib.downloader import download_chapter
 from linovelib.epub_builder import build_epub
 from linovelib.cli import build_parsed_args, choose_volumes
+from linovelib.events import DownloadEvent, emit
 from linovelib.paths import CACHE_DIR, DEFAULT_DOWNLOAD_DIR
 
 # 中文 Windows 的 stdout/stderr 默认是 GBK：章节标题或内容里一旦出现 GBK 编不了的字符
@@ -128,7 +129,7 @@ def _sweep_temp(folder):
         pass
 
 
-def main(argv=None):
+def main(argv=None, *, observer=None, cancel_event=None):
     args = build_parsed_args(argv)
     if not args.novel and not args.name:
         print("请提供 --novel <编号> 或 --name <书名>。")
@@ -248,6 +249,17 @@ def main(argv=None):
 
     novel.volumes = volumes
 
+    total_chapters = sum(len(vol.chapters) for vol in volumes)
+    completed_chapters = 0
+    emit(observer, DownloadEvent(
+        "download_started", total=total_chapters,
+        message=f"准备下载 {len(volumes)} 卷、{total_chapters} 章"))
+    for vi, vol in enumerate(volumes, start=1):
+        for ch in vol.chapters:
+            emit(observer, DownloadEvent(
+                "chapter_pending", volume_index=vi, volume_title=vol.title,
+                chapter_id=ch.id, chapter_title=ch.title, total=total_chapters))
+
     # 输出策略：默认【每下一卷就立即合成该卷】(边下边出，某卷卡住/失败不影响已完成的卷)。
     # 多卷时不再询问；只有显式 --merge 才额外补一份整本合并 EPUB。
     # --out 给了单一目标文件时不逐卷合成，全部下完再合成一个(单卷=该卷，多卷=合并本)。
@@ -258,6 +270,8 @@ def main(argv=None):
             p = build_epub(sub, out, cover)
             written.append(p)
             print(f"已生成：{p}")
+            emit(observer, DownloadEvent("epub_written", output_path=str(p),
+                                         message=f"已生成：{p}"))
         except Exception as e:
             print(f"生成 EPUB 失败：{out}（{e}）")
 
@@ -292,12 +306,32 @@ def main(argv=None):
                 continue
         vol_total = len(vol.chapters)
         for ci, ch in enumerate(vol.chapters, start=1):
+            if cancel_event is not None and cancel_event.is_set():
+                emit(observer, DownloadEvent(
+                    "cancelled", volume_index=vi, volume_title=vol.title,
+                    completed=completed_chapters, total=total_chapters,
+                    message="已在章节边界安全取消下载。"))
+                return 130
+            emit(observer, DownloadEvent(
+                "chapter_started", volume_index=vi, volume_title=vol.title,
+                chapter_id=ch.id, chapter_title=ch.title,
+                completed=completed_chapters, total=total_chapters))
             try:
                 download_chapter(ch, nid, fetcher, tmpdir)
+                completed_chapters += 1
                 print(f"  [OK] {vol_label} 章节 {ci}/{vol_total} 完成：{ch.title if ch.title else ch.id}")
+                emit(observer, DownloadEvent(
+                    "chapter_finished", volume_index=vi, volume_title=vol.title,
+                    chapter_id=ch.id, chapter_title=ch.title,
+                    completed=completed_chapters, total=total_chapters))
             except Exception as e:
                 failed.append((ch.id, ch.title))
                 print(f"  [ERR] {vol_label} 章节 {ci}/{vol_total} 失败：{ch.title or ch.id}（{e}）")
+                emit(observer, DownloadEvent(
+                    "chapter_failed", volume_index=vi, volume_title=vol.title,
+                    chapter_id=ch.id, chapter_title=ch.title,
+                    completed=completed_chapters, total=total_chapters,
+                    message=str(e)))
         if out is not None:
             # 该卷已下完 → 立即合成该卷 EPUB（不等其余卷），封面用该卷自己的。
             _build(_novel_subset(novel, [vol], f"vol{vi}"), out, _vol_cover(vol))
@@ -326,6 +360,9 @@ def main(argv=None):
         print("以下章节未能下载：")
         for cid, title in failed:
             print(f"  {cid} {title}")
+    emit(observer, DownloadEvent(
+        "finished", completed=completed_chapters, total=total_chapters,
+        message="下载结束。" if not failed else f"下载结束，{len(failed)} 章失败。"))
     return 0
 
 
