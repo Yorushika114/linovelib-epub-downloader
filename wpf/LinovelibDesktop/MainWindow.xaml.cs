@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Windows.Data;
 using System.Globalization;
 using System.Linq;
 using System.Windows;
@@ -23,6 +24,7 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         ChapterGrid.ItemsSource = _rows;
+        CollectionViewSource.GetDefaultView(_rows).Filter = FilterRows;
         UpdateTaskOverview();
     }
 
@@ -148,6 +150,7 @@ public partial class MainWindow : Window
             if (!string.IsNullOrWhiteSpace(item.Message)) current.Detail = item.Message;
         }
         if (item.Kind == "cancelled") StatusText.Text = "已在章节边界安全取消下载。";
+        CollectionViewSource.GetDefaultView(_rows).Refresh();
         UpdateTaskOverview();
     }
 
@@ -173,6 +176,13 @@ public partial class MainWindow : Window
             LogToggleButton.Content = "展开日志";
         }
     }
+
+    private string _filter = "全部";
+    private bool FilterRows(object item) => item is ChapterRow row && (_filter == "全部" || row.State == _filter);
+    private void AllFilterButton_Click(object sender, RoutedEventArgs e) => SetFilter("全部");
+    private void CompletedFilterButton_Click(object sender, RoutedEventArgs e) => SetFilter("已完成");
+    private void WaitingFilterButton_Click(object sender, RoutedEventArgs e) => SetFilter("等待中");
+    private void SetFilter(string filter) { _filter = filter; CollectionViewSource.GetDefaultView(_rows).Refresh(); }
 
     private void UpdateTaskOverview()
     {
