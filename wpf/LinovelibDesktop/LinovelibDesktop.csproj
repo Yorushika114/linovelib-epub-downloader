@@ -8,4 +8,7 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <Version>1.0.4</Version>
   </PropertyGroup>
+  <ItemGroup>
+    <Resource Include="Assets\anime-avatar-icons8.jpg" />
+  </ItemGroup>
 </Project>
