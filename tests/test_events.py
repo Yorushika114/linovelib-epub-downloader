@@ -61,11 +61,11 @@ def test_main_reports_completed_chapter_then_stops_at_next_boundary(monkeypatch,
 
     assert result == 130
     assert [event.kind for event in events] == [
-        "download_started", "chapter_pending", "chapter_started",
-        "chapter_finished", "cancelled",
+        "download_started", "chapter_pending", "chapter_pending",
+        "chapter_started", "chapter_finished", "cancelled",
     ]
-    assert events[3].completed == 1
-    assert events[3].total == 2
+    assert events[4].completed == 1
+    assert events[4].total == 2
 
 
 def test_main_reports_written_epub_path(monkeypatch, tmp_path):

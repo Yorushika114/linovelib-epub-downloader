@@ -303,6 +303,14 @@ def main(argv=None, *, observer=None, cancel_event=None):
     emit(observer, DownloadEvent(
         "download_started", total=total_chapters,
         message=f"准备下载 {active_volume_count} 卷、{total_chapters} 章"))
+    for vi, vol in enumerate(volumes, start=1):
+        if vi in skipped_volume_indexes:
+            continue
+        for ch in vol.chapters:
+            emit(observer, DownloadEvent(
+                "chapter_pending", volume_index=vi, volume_title=vol.title,
+                chapter_id=ch.id, chapter_title=ch.title,
+                total=total_chapters))
 
     for vi, vol in enumerate(volumes, start=1):
         # 进度按【当前卷】显示：只显示本卷内的 X/Y（每卷各自计数），
@@ -319,10 +327,6 @@ def main(argv=None, *, observer=None, cancel_event=None):
                     completed=completed_chapters, total=total_chapters,
                     message="已在章节边界安全取消下载。"))
                 return 130
-            emit(observer, DownloadEvent(
-                "chapter_pending", volume_index=vi, volume_title=vol.title,
-                chapter_id=ch.id, chapter_title=ch.title,
-                completed=completed_chapters, total=total_chapters))
             emit(observer, DownloadEvent(
                 "chapter_started", volume_index=vi, volume_title=vol.title,
                 chapter_id=ch.id, chapter_title=ch.title,
