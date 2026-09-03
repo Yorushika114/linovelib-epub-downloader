@@ -38,3 +38,8 @@ def test_wpf_exposes_log_toggle_handler_and_clear_status_copy():
 def test_wpf_default_window_fits_a_1280_by_720_work_area():
     assert 'Width="1180"' in XAML
     assert 'Height="650"' in XAML
+
+
+def test_wpf_refreshes_active_filter_after_each_download_event():
+    event_body = CODE.split("private void ApplyEvent", 1)[1].split("private void AppendLog", 1)[0]
+    assert "CollectionViewSource.GetDefaultView(_rows).Refresh();" in event_body
