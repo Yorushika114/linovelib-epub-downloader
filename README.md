@@ -32,7 +32,7 @@ python -m pip install -r requirements.txt
 3. 选择一种启动方式：
 
    - **交互式（推荐）**：双击 `download.bat`，或在终端执行 `python launcher.py`。
-    - **Windows WPF 图形界面**：双击 `start_wpf_ui.bat`。首次启动会构建本地 WPF 程序；界面会显示实际待下载章节、进度和安全取消状态。
+   - **Windows WPF 图形界面**：双击 `start_wpf_ui.bat`。首次启动会构建本地 WPF 程序；界面会显示实际待下载章节、进度和安全取消状态。
    - **命令行**：在终端直接执行 `python main.py` 并附加参数，适合固定配置或批量运行。
 
 ### 交互式设置
@@ -44,7 +44,7 @@ python -m pip install -r requirements.txt
 2. **卷数**：输入目录显示的卷序号，例如 `4`；多个卷用英文逗号分隔，例如 `1,3,5`；输入 `all` 下载全部卷。
 3. 每个章节完成时会显示进度；本次任务结束后会回到编号输入处，可继续下载另一部小说。输入 `q` 或直接回车退出。
 
-默认生成的 EPUB 位于项目根目录下的 `download/<小说名>/`。缓存位于 `_tmp_dl/`，两者都不上传到 GitHub。
+默认生成的 EPUB 位于项目根目录下的 `download/<小说名>/`。若某个目标 EPUB 已存在会自动跳过（重新下载请加 `--force`；`--out` 与 `--merge` 同样适用）。缓存位于 `_tmp_dl/`，两者都不上传到 GitHub。
 
 ### Windows WPF 图形界面
 
@@ -62,6 +62,7 @@ python -m pip install -r requirements.txt
 | 自定义文件位置 | `python main.py --novel 3095 --volumes 4 --out output/book.epub` | 输出到相对项目目录的 `output/` 下 |
 | 降低请求频率 | `python main.py --novel 3095 --volumes 4 --delay 2` | 每次请求至少间隔 2 秒，网络受限时建议使用 |
 | 不弹出卷选择 | `python main.py --novel 3095 --vol all --no-interactive` | 适合脚本自动执行 |
+| 重新下载已存在 | `python main.py --novel 3095 --volumes 4 --force` | 目标已存在时仍覆盖重下（默认自动跳过） |
 
 ## 用法
 
@@ -88,6 +89,7 @@ python main.py --novel 3095
 | `--volumes` | 选择卷（从 1 开始，逗号分隔，如 `1,3,5`） |
 | `--vol all` | 下载全部卷 |
 | `--out` | 输出 `.epub` 路径；未传入时写入项目根目录的 `download/<书名>/` |
+| `--force` | 目标 EPUB 已存在时仍重新下载并覆盖（默认检测到已存在则跳过） |
 | `--delay` | 请求间隔秒，默认 `0.4`，慢速限流设置 |
 | `--no-interactive` | 未指定 `--vol/--volumes` 时不弹交互、下载全部 |
 
@@ -102,7 +104,9 @@ python main.py --novel 3095
 ├─ docs/                  # 发布设计与实施记录
 ├─ main.py                # 命令行入口
 ├─ launcher.py            # Windows 交互式入口
+├─ start_wpf_ui.bat       # Windows WPF 界面启动器
 ├─ download.bat           # Windows 批处理启动器
+├─ wpf/                   # WPF 桌面界面项目
 ├─ requirements.txt       # Python 依赖
 └─ README.md
 ```
