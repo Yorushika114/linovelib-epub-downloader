@@ -12,6 +12,7 @@ public partial class MainWindow : Window
     private readonly DownloaderBridge _bridge = new();
     private readonly ObservableCollection<ChapterRow> _rows = new();
     private readonly Dictionary<string, ChapterRow> _rowsById = new();
+    private string _lastLogLine = "";
 
     public MainWindow()
     {
@@ -24,7 +25,7 @@ public partial class MainWindow : Window
         if (string.IsNullOrWhiteSpace(NovelIdBox.Text)) { Report("请输入小说编号。"); return; }
         if (!double.TryParse(DelayBox.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out var delay) || delay < 0) { Report("请求间隔必须是大于等于 0 的数字。"); return; }
 
-        _rows.Clear(); _rowsById.Clear(); Progress.Value = 0; Progress.Maximum = 1; ProgressText.Text = "0 / 0 章";
+        _rows.Clear(); _rowsById.Clear(); _lastLogLine = ""; LogBox.Clear(); Progress.Value = 0; Progress.Maximum = 1; ProgressText.Text = "0 / 0 章";
         StartButton.IsEnabled = false; CancelButton.IsEnabled = true; StatusText.Text = "正在启动下载任务…";
         var request = new DownloadRequest(NovelIdBox.Text.Trim(), string.IsNullOrWhiteSpace(VolumesBox.Text) ? "all" : VolumesBox.Text.Trim(), delay.ToString(CultureInfo.InvariantCulture), OutputBox.Text.Trim());
         try
@@ -54,6 +55,12 @@ public partial class MainWindow : Window
         if (item.Kind == "cancelled") StatusText.Text = "已在章节边界安全取消下载。";
     }
 
-    private void AppendLog(string line) { LogBox.AppendText(line + Environment.NewLine); LogBox.ScrollToEnd(); }
+    private void AppendLog(string line)
+    {
+        if (line == _lastLogLine) return;
+        _lastLogLine = line;
+        LogBox.AppendText(line + Environment.NewLine);
+        LogBox.ScrollToEnd();
+    }
     private void Report(string message) { StatusText.Text = message; AppendLog(message); }
 }
