@@ -11,6 +11,7 @@ __pycache__/
 _tmp_dl/
 download/
 *.epub
+artifacts/
 
 # Local diagnostics and editor files
 tmp_*

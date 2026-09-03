@@ -9,6 +9,13 @@ if errorlevel 1 (
     exit /b 1
 )
 
+tasklist /fi "imagename eq LinovelibDesktop.exe" /nh | find /i "LinovelibDesktop.exe" >nul
+if not errorlevel 1 (
+    echo [INFO] The WPF UI is already running.
+    powershell -NoProfile -Command "$shell = New-Object -ComObject WScript.Shell; $null = $shell.AppActivate('轻小说 EPUB 下载器')" >nul 2>nul
+    exit /b 0
+)
+
 dotnet build "wpf\LinovelibDesktop\LinovelibDesktop.csproj" --nologo --verbosity:minimal
 set "EXIT_CODE=%ERRORLEVEL%"
 if not "%EXIT_CODE%"=="0" (

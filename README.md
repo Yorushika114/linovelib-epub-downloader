@@ -32,7 +32,7 @@ python -m pip install -r requirements.txt
 3. 选择一种启动方式：
 
    - **交互式（推荐）**：双击 `download.bat`，或在终端执行 `python launcher.py`。
-   - **Windows 图形界面**：在终端执行 `python desktop_gui.py`。可填写小说编号、卷号和输出位置；下载会在后台运行，窗口会显示总体进度、当前章节、各章节完成/失败状态，并可在章节之间安全取消。
+    - **Windows WPF 图形界面**：双击 `start_wpf_ui.bat`。首次启动会构建本地 WPF 程序；界面会显示实际待下载章节、进度和安全取消状态。
    - **命令行**：在终端直接执行 `python main.py` 并附加参数，适合固定配置或批量运行。
 
 ### 交互式设置
@@ -46,17 +46,11 @@ python -m pip install -r requirements.txt
 
 默认生成的 EPUB 位于项目根目录下的 `download/<小说名>/`。缓存位于 `_tmp_dl/`，两者都不上传到 GitHub。
 
-### Windows 图形界面
+### Windows WPF 图形界面
 
-运行以下命令启动桌面界面：
+双击项目根目录的 `start_wpf_ui.bat` 启动桌面界面。它会检查 .NET 8 SDK、构建 WPF 程序后独立打开窗口；若窗口已经打开，则会直接激活现有窗口而不会重复构建。
 
-```powershell
-python desktop_gui.py
-```
-
-界面默认下载全部卷；可把“卷号”改为 `1-3,5` 等范围。开始后，进度条显示已处理章节数，章节表会实时标为“等待中 / 下载中 / 已完成 / 失败”。点击“取消下载”会等待当前章节处理完毕后停止，不会强制终止 Python。背景图是项目内置的原创轻小说风格插画，不联网加载。
-
-如果执行 `desktop_gui.py` 时提示缺少 Tk，请在安装 Python 时勾选 **tcl/tk and IDLE** 组件，或使用包含 Tkinter 的官方 Python 安装包。
+界面默认下载全部卷；可把“卷号”改为 `1-3,5` 等范围。开始后，表格会列出未生成 EPUB 的剩余章节，并实时标为“等待中 / 下载中 / 已完成 / 失败”。点击“安全取消”会在准备阶段或当前章节边界停止，不会强制终止 Python。
 
 ### 常用设置速查
 

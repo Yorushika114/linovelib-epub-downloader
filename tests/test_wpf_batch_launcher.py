@@ -8,6 +8,7 @@ def test_wpf_batch_launcher_builds_and_starts_wpf_without_gui_launcher():
 
     assert 'cd /d "%~dp0"' in script
     assert 'where dotnet >nul 2>nul' in script
+    assert 'tasklist /fi "imagename eq linovelibdesktop.exe" /nh' in script.lower()
     assert 'dotnet build "wpf\\LinovelibDesktop\\LinovelibDesktop.csproj" --nologo --verbosity:minimal' in script
     assert 'start "" "wpf\\LinovelibDesktop\\bin\\Debug\\net8.0-windows\\LinovelibDesktop.exe"' in script
     assert 'start_gui.bat' not in script

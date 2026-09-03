@@ -131,6 +131,16 @@ def _sweep_temp(folder):
 
 def main(argv=None, *, observer=None, cancel_event=None):
     args = build_parsed_args(argv)
+
+    def _cancel_if_requested():
+        if cancel_event is not None and cancel_event.is_set():
+            emit(observer, DownloadEvent(
+                "cancelled", message="已在下载准备阶段安全取消。"))
+            return True
+        return False
+
+    if _cancel_if_requested():
+        return 130
     if not args.novel and not args.name:
         print("请提供 --novel <编号> 或 --name <书名>。")
         return 2
@@ -321,12 +331,6 @@ def main(argv=None, *, observer=None, cancel_event=None):
             continue
         vol_total = len(vol.chapters)
         for ci, ch in enumerate(vol.chapters, start=1):
-            if cancel_event is not None and cancel_event.is_set():
-                emit(observer, DownloadEvent(
-                    "cancelled", volume_index=vi, volume_title=vol.title,
-                    completed=completed_chapters, total=total_chapters,
-                    message="已在章节边界安全取消下载。"))
-                return 130
             emit(observer, DownloadEvent(
                 "chapter_started", volume_index=vi, volume_title=vol.title,
                 chapter_id=ch.id, chapter_title=ch.title,
@@ -347,6 +351,13 @@ def main(argv=None, *, observer=None, cancel_event=None):
                     chapter_id=ch.id, chapter_title=ch.title,
                     completed=completed_chapters, total=total_chapters,
                     message=str(e)))
+            # 在每次章节处理完后检查取消：让当前章读完再停（安全取消在章节边界生效）。
+            if cancel_event is not None and cancel_event.is_set():
+                emit(observer, DownloadEvent(
+                    "cancelled", volume_index=vi, volume_title=vol.title,
+                    completed=completed_chapters, total=total_chapters,
+                    message="已在章节边界安全取消下载。"))
+                return 130
         if out is not None:
             # 该卷已下完 → 立即合成该卷 EPUB（不等其余卷），封面用该卷自己的。
             _build(_novel_subset(novel, [vol], f"vol{vi}"), out, _vol_cover(vol))

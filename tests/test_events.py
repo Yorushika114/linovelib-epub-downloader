@@ -131,3 +131,22 @@ def test_main_does_not_publish_pending_rows_for_an_existing_volume(monkeypatch, 
     assert result == 0
     assert all(event.kind != "chapter_pending" for event in events)
     assert events[0].total == 0
+
+
+def test_main_stops_before_any_network_setup_when_cancelled(monkeypatch):
+    app = importlib.import_module("main")
+    events = []
+
+    class AlreadyCancelled:
+        def is_set(self):
+            return True
+
+    monkeypatch.setattr(app, "Fetcher", lambda **kwargs: (_ for _ in ()).throw(
+        AssertionError("network setup must not start after cancellation")
+    ))
+
+    result = app.main(["--novel", "99"], observer=events.append,
+                      cancel_event=AlreadyCancelled())
+
+    assert result == 130
+    assert [event.kind for event in events] == ["cancelled"]
