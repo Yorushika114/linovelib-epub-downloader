@@ -249,17 +249,6 @@ def main(argv=None, *, observer=None, cancel_event=None):
 
     novel.volumes = volumes
 
-    total_chapters = sum(len(vol.chapters) for vol in volumes)
-    completed_chapters = 0
-    emit(observer, DownloadEvent(
-        "download_started", total=total_chapters,
-        message=f"准备下载 {len(volumes)} 卷、{total_chapters} 章"))
-    for vi, vol in enumerate(volumes, start=1):
-        for ch in vol.chapters:
-            emit(observer, DownloadEvent(
-                "chapter_pending", volume_index=vi, volume_title=vol.title,
-                chapter_id=ch.id, chapter_title=ch.title, total=total_chapters))
-
     # 输出策略：默认【每下一卷就立即合成该卷】(边下边出，某卷卡住/失败不影响已完成的卷)。
     # 多卷时不再询问；只有显式 --merge 才额外补一份整本合并 EPUB。
     # --out 给了单一目标文件时不逐卷合成，全部下完再合成一个(单卷=该卷，多卷=合并本)。
@@ -293,17 +282,35 @@ def main(argv=None, *, observer=None, cancel_event=None):
         skipped.append(existing)
         print(f"已存在，跳过：{existing}")
 
+    # 在公布下载事件前先过滤已经生成 EPUB 的卷，避免界面出现永远停在“等待中”的旧章节。
+    volume_outputs = {}
+    skipped_volume_indexes = set()
+    for vi, vol in enumerate(volumes, start=1):
+        out = None
+        if folder is not None:
+            out = folder / f"{title_safe}{_volume_suffix([vol], novel.title)}.epub"
+            if out.exists() and not args.force:
+                _skip(out)
+                skipped_volume_indexes.add(vi)
+        volume_outputs[vi] = out
+
+    total_chapters = sum(
+        len(vol.chapters) for vi, vol in enumerate(volumes, start=1)
+        if vi not in skipped_volume_indexes
+    )
+    completed_chapters = 0
+    active_volume_count = len(volumes) - len(skipped_volume_indexes)
+    emit(observer, DownloadEvent(
+        "download_started", total=total_chapters,
+        message=f"准备下载 {active_volume_count} 卷、{total_chapters} 章"))
+
     for vi, vol in enumerate(volumes, start=1):
         # 进度按【当前卷】显示：只显示本卷内的 X/Y（每卷各自计数），
         # 不再显示 1/316 这种跨卷总数——那样看不出进度发生在哪一卷。
         vol_label = _volume_suffix([vol], novel.title).strip() or f"第{vi}卷"
-        out = None
-        if folder is not None:
-            # 先定该卷的输出路径；已存在且未 --force 时整卷跳过，绝不浪费网络。
-            out = folder / f"{title_safe}{_volume_suffix([vol], novel.title)}.epub"
-            if out.exists() and not args.force:
-                _skip(out)
-                continue
+        out = volume_outputs[vi]
+        if vi in skipped_volume_indexes:
+            continue
         vol_total = len(vol.chapters)
         for ci, ch in enumerate(vol.chapters, start=1):
             if cancel_event is not None and cancel_event.is_set():
@@ -312,6 +319,10 @@ def main(argv=None, *, observer=None, cancel_event=None):
                     completed=completed_chapters, total=total_chapters,
                     message="已在章节边界安全取消下载。"))
                 return 130
+            emit(observer, DownloadEvent(
+                "chapter_pending", volume_index=vi, volume_title=vol.title,
+                chapter_id=ch.id, chapter_title=ch.title,
+                completed=completed_chapters, total=total_chapters))
             emit(observer, DownloadEvent(
                 "chapter_started", volume_index=vi, volume_title=vol.title,
                 chapter_id=ch.id, chapter_title=ch.title,

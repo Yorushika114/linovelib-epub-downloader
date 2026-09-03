@@ -61,11 +61,11 @@ def test_main_reports_completed_chapter_then_stops_at_next_boundary(monkeypatch,
 
     assert result == 130
     assert [event.kind for event in events] == [
-        "download_started", "chapter_pending", "chapter_pending",
-        "chapter_started", "chapter_finished", "cancelled",
+        "download_started", "chapter_pending", "chapter_started",
+        "chapter_finished", "cancelled",
     ]
-    assert events[4].completed == 1
-    assert events[4].total == 2
+    assert events[3].completed == 1
+    assert events[3].total == 2
 
 
 def test_main_reports_written_epub_path(monkeypatch, tmp_path):
@@ -98,3 +98,36 @@ def test_main_reports_written_epub_path(monkeypatch, tmp_path):
     assert result == 0
     assert any(event.kind == "epub_written" and event.output_path == str(output)
                for event in events)
+
+
+def test_main_does_not_publish_pending_rows_for_an_existing_volume(monkeypatch, tmp_path):
+    app = importlib.import_module("main")
+    events = []
+    novel = Novel(id="99", title="测试书", author="测试作者")
+    volume = Volume(title="测试书 1", chapters=[
+        Chapter(id="1", url="https://example.test/1", title="第一章"),
+    ])
+
+    class FakeFetcher:
+        def __init__(self, **kwargs):
+            pass
+
+        def get_html(self, url):
+            return "<html/>"
+
+    output_root = tmp_path / "downloads"
+    existing = output_root / "测试书" / "测试书 第1卷.epub"
+    existing.parent.mkdir(parents=True)
+    existing.write_bytes(b"existing")
+    monkeypatch.setattr(app, "Fetcher", FakeFetcher)
+    monkeypatch.setattr(app, "resolve_id", lambda identifier, fetcher: "99")
+    monkeypatch.setattr(app, "fetch_novel", lambda nid, fetcher: novel)
+    monkeypatch.setattr(app, "parse_catalog", lambda html, nid: [volume])
+    monkeypatch.setattr(app, "DEFAULT_DOWNLOAD_DIR", output_root)
+    monkeypatch.setattr(app, "CACHE_DIR", tmp_path / "cache")
+
+    result = app.main(["--novel", "99", "--volumes", "1"], observer=events.append)
+
+    assert result == 0
+    assert all(event.kind != "chapter_pending" for event in events)
+    assert events[0].total == 0
