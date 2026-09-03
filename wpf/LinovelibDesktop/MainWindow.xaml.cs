@@ -23,6 +23,7 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         ChapterGrid.ItemsSource = _rows;
+        UpdateTaskOverview();
     }
 
     private async void StartButton_Click(object sender, RoutedEventArgs e)
@@ -34,6 +35,7 @@ public partial class MainWindow : Window
         if (!double.TryParse(DelayBox.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out var delay) || delay < 0) { Report("请求间隔必须是大于等于 0 的数字。"); return; }
 
         _rows.Clear(); _rowsById.Clear(); _lastLogLine = ""; LogBox.Clear(); Progress.Value = 0; Progress.Maximum = 1; ProgressText.Text = "0 / 0 章";
+        UpdateTaskOverview();
         SetCentralMode(selection: false);
         StartButton.IsEnabled = false; CancelButton.IsEnabled = true; StatusText.Text = "正在启动下载任务…";
         var request = new DownloadRequest(idText, string.IsNullOrWhiteSpace(VolumesBox.Text) ? "all" : VolumesBox.Text.Trim(), delay.ToString(CultureInfo.InvariantCulture), OutputBox.Text.Trim());
@@ -146,6 +148,7 @@ public partial class MainWindow : Window
             if (!string.IsNullOrWhiteSpace(item.Message)) current.Detail = item.Message;
         }
         if (item.Kind == "cancelled") StatusText.Text = "已在章节边界安全取消下载。";
+        UpdateTaskOverview();
     }
 
     private void AppendLog(string line)
@@ -154,6 +157,33 @@ public partial class MainWindow : Window
         _lastLogLine = line;
         LogBox.AppendText(line + Environment.NewLine);
         LogBox.ScrollToEnd();
+        UpdateTaskOverview();
+    }
+    private void LogToggleButton_Click(object sender, RoutedEventArgs e)
+    {
+        var opening = LogPanel.Visibility != Visibility.Visible;
+        if (opening)
+        {
+            LogPanel.Visibility = Visibility.Visible;
+            LogToggleButton.Content = "收起日志";
+        }
+        else
+        {
+            LogPanel.Visibility = Visibility.Collapsed;
+            LogToggleButton.Content = "展开日志";
+        }
+    }
+
+    private void UpdateTaskOverview()
+    {
+        var finished = _rows.Count(row => row.State == "已完成");
+        var failed = _rows.Count(row => row.State == "失败");
+        var running = _rows.Count(row => row.State == "下载中");
+        var waiting = _rows.Count(row => row.State == "等待中");
+        TaskOverviewText.Text = _rows.Count == 0
+            ? "准备开始新的下载任务"
+            : $"{finished} 已完成 · {running} 下载中 · {waiting} 等待 · {failed} 失败";
+        LogSummaryText.Text = string.IsNullOrWhiteSpace(_lastLogLine) ? "暂无运行日志" : _lastLogLine;
     }
     private void Report(string message) { StatusText.Text = message; AppendLog(message); }
 }

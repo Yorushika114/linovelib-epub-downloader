@@ -6,6 +6,10 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\anime-avatar-icons8.ico</ApplicationIcon>
     <Version>1.0.4</Version>
   </PropertyGroup>
+  <ItemGroup>
+    <Resource Include="Assets\anime-avatar-icons8.jpg" />
+  </ItemGroup>
 </Project>
