@@ -15,7 +15,16 @@ from linovelib.events import DownloadEvent
 
 def event_to_json(event: DownloadEvent) -> str:
     """Encode one download event as one UTF-8-safe JSON line."""
-    return json.dumps(dataclasses.asdict(event), ensure_ascii=False)
+    payload = {
+        _camel_case(key): value
+        for key, value in dataclasses.asdict(event).items()
+    }
+    return json.dumps(payload, ensure_ascii=False)
+
+
+def _camel_case(key: str) -> str:
+    head, *tail = key.split("_")
+    return head + "".join(part.capitalize() for part in tail)
 
 
 def emit_json_event(event: DownloadEvent) -> None:
