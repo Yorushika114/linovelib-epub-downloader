@@ -242,15 +242,8 @@ def main(argv=None):
     novel.volumes = volumes
 
     # 输出策略：默认【每下一卷就立即合成该卷】(边下边出，某卷卡住/失败不影响已完成的卷)。
-    # 多卷时最终再额外询问是否整本合并(--merge 强制合并；--no-interactive 不询问仅逐卷)。
+    # 多卷时不再询问；只有显式 --merge 才额外补一份整本合并 EPUB。
     # --out 给了单一目标文件时不逐卷合成，全部下完再合成一个(单卷=该卷，多卷=合并本)。
-    def _ask_merge():
-        try:
-            ans = input("检测到多卷。是否额外生成一份「整本合并」的 EPUB？(y/N): ").strip().lower()
-        except (EOFError, KeyboardInterrupt):
-            return False
-        return ans in ("y", "yes")
-
     written = []
 
     def _build(sub, out, cover):
@@ -294,15 +287,11 @@ def main(argv=None):
         sub = _novel_subset(novel, volumes, "book" if len(volumes) == 1 else "merged")
         _build(sub, args.out, _vol_cover(volumes[0]) if volumes else None)
 
-    # 多卷 & 默认目录：最后询问是否额外生成合并本（逐卷版保留；`y` 再补一份整本）。
-    if folder is not None and len(volumes) > 1:
-        merge = args.merge
-        if not merge and not args.no_interactive:
-            merge = _ask_merge()
-        if merge:
-            out = folder / f"{title_safe}{_volume_suffix(volumes, novel.title)}.epub"
-            _build(_novel_subset(novel, volumes, "merged"), out,
-                   _vol_cover(volumes[0]) if volumes else None)
+    # 多卷 & 默认目录：不再询问。仅当显式 --merge 时才额外补一份整本合并 EPUB。
+    if folder is not None and len(volumes) > 1 and args.merge:
+        out = folder / f"{title_safe}{_volume_suffix(volumes, novel.title)}.epub"
+        _build(_novel_subset(novel, volumes, "merged"), out,
+               _vol_cover(volumes[0]) if volumes else None)
 
     if not written:
         return 1
