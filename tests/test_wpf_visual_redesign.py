@@ -43,3 +43,8 @@ def test_wpf_default_window_fits_a_1280_by_720_work_area():
 def test_wpf_refreshes_active_filter_after_each_download_event():
     event_body = CODE.split("private void ApplyEvent", 1)[1].split("private void AppendLog", 1)[0]
     assert "CollectionViewSource.GetDefaultView(_rows).Refresh();" in event_body
+
+
+def test_wpf_resets_the_chapter_filter_before_a_new_download_starts():
+    start_body = CODE.split("private async void StartButton_Click", 1)[1].split("private void CancelButton_Click", 1)[0]
+    assert 'SetFilter("全部");' in start_body
