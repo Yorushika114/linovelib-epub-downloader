@@ -83,3 +83,12 @@ def test_wpf_bridge_has_resolve_mode():
 
     assert "ResolveAsync" in cs
     assert '"--resolve"' in cs
+
+
+def test_wpf_candidate_list_uses_a_notifying_collection_between_searches():
+    cs = (Path(__file__).parents[1] / "wpf" / "LinovelibDesktop" / "MainWindow.xaml.cs"
+          ).read_text(encoding="utf-8")
+
+    assert "ObservableCollection<ResolveResultDto> _candidates" in cs
+    assert "CandidateList.ItemsSource = _candidates;" in cs
+    assert "_candidates.AddRange(results)" not in cs

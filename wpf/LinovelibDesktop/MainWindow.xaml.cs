@@ -17,13 +17,14 @@ public partial class MainWindow : Window
     private readonly DownloaderBridge _bridge = new();
     private readonly ObservableCollection<ChapterRow> _rows = new();
     private readonly Dictionary<string, ChapterRow> _rowsById = new();
-    private readonly List<ResolveResultDto> _candidates = new();
+    private readonly ObservableCollection<ResolveResultDto> _candidates = new();
     private string _lastLogLine = "";
 
     public MainWindow()
     {
         InitializeComponent();
         ChapterGrid.ItemsSource = _rows;
+        CandidateList.ItemsSource = _candidates;
         CollectionViewSource.GetDefaultView(_rows).Filter = FilterRows;
         UpdateTaskOverview();
     }
@@ -37,6 +38,7 @@ public partial class MainWindow : Window
         if (!double.TryParse(DelayBox.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out var delay) || delay < 0) { Report("请求间隔必须是大于等于 0 的数字。"); return; }
 
         _rows.Clear(); _rowsById.Clear(); _lastLogLine = ""; LogBox.Clear(); Progress.Value = 0; Progress.Maximum = 1; ProgressText.Text = "0 / 0 章";
+        SetFilter("全部");
         UpdateTaskOverview();
         SetCentralMode(selection: false);
         StartButton.IsEnabled = false; CancelButton.IsEnabled = true; StatusText.Text = "正在启动下载任务…";
@@ -65,7 +67,7 @@ public partial class MainWindow : Window
             StatusText.Text = $"正在按书名搜索『{text}』…";
             var results = await _bridge.ResolveAsync(text);
             _candidates.Clear();
-            _candidates.AddRange(results);
+            foreach (var result in results) _candidates.Add(result);
 
             if (_candidates.Count == 0)
             {
@@ -82,17 +84,15 @@ public partial class MainWindow : Window
                 return;
             }
             // 书目与候选精确吻合：等同 CLI 的自动选取，无需再让用户筛选。
-            var exactIndex = _candidates.FindIndex(c => c.Exact);
-            if (exactIndex >= 0)
+            var exact = _candidates.FirstOrDefault(c => c.Exact);
+            if (exact is not null)
             {
                 SetCentralMode(selection: false);
-                var hit = _candidates[exactIndex];
-                NovelIdBox.Text = hit.Id;
-                Report($"已选定：{hit.Title}（id={hit.Id}）；请设置卷号后开始下载。");
+                NovelIdBox.Text = exact.Id;
+                Report($"已选定：{exact.Title}（id={exact.Id}）；请设置卷号后开始下载。");
                 return;
             }
             // 无精确吻合：在主内容区列出候选让用户筛选，确定后才进入卷数/下载。
-            CandidateList.ItemsSource = _candidates;
             CandidateList.SelectedIndex = -1;
             SetCentralMode(selection: true);
             Report($"找到 {_candidates.Count} 个候选，请在上方列表中选择书名。");
