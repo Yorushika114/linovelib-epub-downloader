@@ -1,5 +1,6 @@
 import sys
 import re
+import pathlib
 import dataclasses
 from linovelib.fetcher import Fetcher
 from linovelib.resolver import resolve_id, fetch_novel, ResolveError
@@ -133,6 +134,12 @@ def main(argv=None):
         print("请提供 --novel <编号> 或 --name <书名>。")
         return 2
 
+    # 检测到目标 EPUB 已存在且未 --force：所有下载方式的通用跳过。这里放在最前，
+    # 单文件 --out 已存在时零网络请求直接返回；默认逐卷/合并本则在下方逐卷检查。
+    if args.out and pathlib.Path(args.out).exists() and not args.force:
+        print(f"已存在，跳过：{args.out}")
+        return 0
+
     # 卷页(vol_XXX.html)偶发慢响应，默认 timeout=15 会频繁超时浪费重试；提到 30s
     # 让慢但正常的响应直接成功（页面 26.8s 成功过）。章节页都快，30s 不影响它们。
     fetcher = Fetcher(delay=args.delay, retries=8, timeout=30)
@@ -265,10 +272,24 @@ def main(argv=None):
         folder.mkdir(parents=True, exist_ok=True)
         _sweep_temp(folder)
 
+    # 已下载过的目标 EPUB：检测到就跳过（所有下载方式都适用；--force 强制重新下载覆盖）。
+    skipped = []
+
+    def _skip(existing):
+        skipped.append(existing)
+        print(f"已存在，跳过：{existing}")
+
     for vi, vol in enumerate(volumes, start=1):
         # 进度按【当前卷】显示：只显示本卷内的 X/Y（每卷各自计数），
         # 不再显示 1/316 这种跨卷总数——那样看不出进度发生在哪一卷。
         vol_label = _volume_suffix([vol], novel.title).strip() or f"第{vi}卷"
+        out = None
+        if folder is not None:
+            # 先定该卷的输出路径；已存在且未 --force 时整卷跳过，绝不浪费网络。
+            out = folder / f"{title_safe}{_volume_suffix([vol], novel.title)}.epub"
+            if out.exists() and not args.force:
+                _skip(out)
+                continue
         vol_total = len(vol.chapters)
         for ci, ch in enumerate(vol.chapters, start=1):
             try:
@@ -277,12 +298,12 @@ def main(argv=None):
             except Exception as e:
                 failed.append((ch.id, ch.title))
                 print(f"  [ERR] {vol_label} 章节 {ci}/{vol_total} 失败：{ch.title or ch.id}（{e}）")
-        if folder is not None:
+        if out is not None:
             # 该卷已下完 → 立即合成该卷 EPUB（不等其余卷），封面用该卷自己的。
-            out = folder / f"{title_safe}{_volume_suffix([vol], novel.title)}.epub"
             _build(_novel_subset(novel, [vol], f"vol{vi}"), out, _vol_cover(vol))
 
     # 单文件 --out：全部下完再合成一个（单卷=该卷，多卷=合并本；尊重用户指定单一目标文件）。
+    # 存在性在上方已提前处理（已存在 → 已 return 0），此处必定要构建（首次或 --force 覆盖）。
     if args.out:
         sub = _novel_subset(novel, volumes, "book" if len(volumes) == 1 else "merged")
         _build(sub, args.out, _vol_cover(volumes[0]) if volumes else None)
@@ -290,10 +311,15 @@ def main(argv=None):
     # 多卷 & 默认目录：不再询问。仅当显式 --merge 时才额外补一份整本合并 EPUB。
     if folder is not None and len(volumes) > 1 and args.merge:
         out = folder / f"{title_safe}{_volume_suffix(volumes, novel.title)}.epub"
-        _build(_novel_subset(novel, volumes, "merged"), out,
-               _vol_cover(volumes[0]) if volumes else None)
+        if out.exists() and not args.force:
+            _skip(out)
+        else:
+            _build(_novel_subset(novel, volumes, "merged"), out,
+                   _vol_cover(volumes[0]) if volumes else None)
 
-    if not written:
+    # 什么都没写、也没跳过任何已存在目标 → 视为无产出，返回非 0。
+    #（若目标都已存在而全部跳过，则属正常「都有、无需再下」，返回 0。）
+    if not written and not skipped:
         return 1
 
     if failed:

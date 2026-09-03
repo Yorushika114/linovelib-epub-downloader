@@ -27,6 +27,8 @@ def build_parsed_args(argv):
                    help="未指定 --vol/--volumes 时，不弹交互并默认下载全部卷")
     p.add_argument("--merge", action="store_true",
                    help="多卷时额外生成一份「整本合并」的 EPUB（默认逐卷边下边出；不再询问）")
+    p.add_argument("--force", action="store_true",
+                   help="目标 EPUB 已存在时仍重新下载并覆盖（默认检测到已存在则跳过，所有下载方式均适用）")
     p.add_argument("--reference",
                    help="正版参考 EPUB 路径（仅作【下载后的外部顺序校正/核对】用，不参与下载过程，"
                         "不自动生效、不跨卷）。下载本身始终为参考无关的 Fisher-Yates 反洗牌。")
