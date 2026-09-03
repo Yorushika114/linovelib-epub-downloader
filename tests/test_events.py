@@ -49,7 +49,7 @@ def test_main_reports_completed_chapter_then_stops_at_next_boundary(monkeypatch,
             return self.checks > 1
 
     monkeypatch.setattr(app, "Fetcher", FakeFetcher)
-    monkeypatch.setattr(app, "resolve_id", lambda identifier, fetcher: "99")
+    monkeypatch.setattr(app, "resolve_id", lambda identifier, fetcher, browser=None: "99")
     monkeypatch.setattr(app, "fetch_novel", lambda nid, fetcher: novel)
     monkeypatch.setattr(app, "parse_catalog", lambda html, nid: [volume])
     monkeypatch.setattr(app, "download_chapter", lambda *args: None)
@@ -85,7 +85,7 @@ def test_main_reports_written_epub_path(monkeypatch, tmp_path):
 
     output = tmp_path / "book.epub"
     monkeypatch.setattr(app, "Fetcher", FakeFetcher)
-    monkeypatch.setattr(app, "resolve_id", lambda identifier, fetcher: "99")
+    monkeypatch.setattr(app, "resolve_id", lambda identifier, fetcher, browser=None: "99")
     monkeypatch.setattr(app, "fetch_novel", lambda nid, fetcher: novel)
     monkeypatch.setattr(app, "parse_catalog", lambda html, nid: [volume])
     monkeypatch.setattr(app, "download_chapter", lambda *args: None)
@@ -120,7 +120,7 @@ def test_main_does_not_publish_pending_rows_for_an_existing_volume(monkeypatch, 
     existing.parent.mkdir(parents=True)
     existing.write_bytes(b"existing")
     monkeypatch.setattr(app, "Fetcher", FakeFetcher)
-    monkeypatch.setattr(app, "resolve_id", lambda identifier, fetcher: "99")
+    monkeypatch.setattr(app, "resolve_id", lambda identifier, fetcher, browser=None: "99")
     monkeypatch.setattr(app, "fetch_novel", lambda nid, fetcher: novel)
     monkeypatch.setattr(app, "parse_catalog", lambda html, nid: [volume])
     monkeypatch.setattr(app, "DEFAULT_DOWNLOAD_DIR", output_root)

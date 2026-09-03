@@ -37,3 +37,15 @@ public sealed class ChapterRow : INotifyPropertyChanged
 }
 
 public sealed record DownloadRequest(string NovelId, string Volumes, string Delay, string OutputPath);
+
+/// <summary>书名搜索解析返回的单个候选（id + 标题）。</summary>
+public sealed class ResolveResultDto
+{
+    public string Kind { get; init; } = "";
+    public string Id { get; init; } = "";
+    public string Title { get; init; } = "";
+    public bool Exact { get; init; }
+
+    /// <summary>供候选列表『吻合』列显示的文本。</summary>
+    public string ExactText => Exact ? "书名吻合" : "";
+}

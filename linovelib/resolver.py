@@ -7,10 +7,11 @@ from .catalog import parse_novel_page
 from .models import Novel
 
 SEARCH_URL = "https://www.linovelib.com/S6/"
-# 站点自带搜索接口 /S6/ 对脚本化请求常返回空（结果由前端/WAF 拦截），因此兜底用
-# 站外搜索引擎做 site:linovelib.com 解析「书名→编号」。都选国内可访问、可抓取 HTML 的端点。
-# 实测 Bing 与 DuckDuckGo 互补：同一书名常只有其中一个命中（Bing 有时静默放宽 site:，
-# DDG 有时收不到结果），故做成「站点接口 → Bing → DDG」依次尝试，谁先命中用谁。
+# 站点自带搜索接口 /S6/?searchkey= 是「客户端渲染 + 需 Cloudflare cookie」：对脚本化
+# requests 永远吐空壳（实测长度 0）。只有用真实浏览器（RenderFetcher.search_html）先暖机
+# 首页再搜索，才能拿到结果。站外搜索引擎（Bing / DuckDuckGo 的 site:）时好时坏——Bing
+# 常静默放宽 site:、DDG 限流、Sogou/360 则对 site: 无结果——因此【本站浏览器搜索为主】，
+# 站外引擎仅兜底。都选国内可访问、可抓取 HTML 的端点。
 BING_SEARCH_URL = "https://cn.bing.com/search"
 DDG_SEARCH_URL = "https://html.duckduckgo.com/html/"
 # 小说落地页 /novel/{nid}.html 偶发被 Cloudflare 机器人挑战(403)拦下，但同样编号的
@@ -29,11 +30,11 @@ class SearchHit:
     title: str
 
 
-def resolve_id(identifier, fetcher):
+def resolve_id(identifier, fetcher, browser=None):
     identifier = (identifier or "").strip()
     if identifier.isdigit():
         return identifier
-    hits = _search_hits(identifier, fetcher)
+    hits = _search_hits(identifier, fetcher, browser=browser)
     if not hits:
         raise ResolveError(
             f"未找到名为「{identifier}」的小说，请改用编号，例如 --novel 3095"
@@ -41,19 +42,41 @@ def resolve_id(identifier, fetcher):
     return _pick_hit(identifier, hits).id
 
 
-def search_by_name(name, fetcher):
+def search_by_name(name, fetcher, browser=None):
     """按书名解析出小说编号；找不到返回空串。多候选时依交互/TTY 决定选取。"""
-    hits = _search_hits(name, fetcher)
+    hits = _search_hits(name, fetcher, browser=browser)
     if not hits:
         return ""
     return _pick_hit(name, hits).id
 
 
-def _search_hits(name, fetcher):
-    """返回去重后的候选命中列表；依次尝试站点接口、Bing、DuckDuckGo，谁先命中返回谁。"""
-    for probe in (_site_hits, _bing_hits, _ddg_hits):
+def search_hits(name, fetcher, browser=None):
+    """按书名返回去重候选列表（SearchHit[]），【不做选取】，供前端（WPF）展示与选择。"""
+    return _search_hits(name, fetcher, browser=browser)
+
+
+def is_exact_match(query, title):
+    """标题与查询词归一化后是否精确吻合，用于前端标记「书名吻合」候选。"""
+    return _norm(title) == _norm(query)
+
+
+
+def _search_hits(name, fetcher, browser=None):
+    """返回去重后的候选命中列表；依次尝试【浏览器站点搜索】→ 站点接口 → Bing → DuckDuckGo。
+
+    浏览器站点搜索是最可靠、最权威的来源（本站自搜、参考无关）：直接 hit 到本站结果，
+    不受站外引擎限流/索引缺失/静默放宽 site: 影响。传入的 browser 为 None（如纯脚本环境、
+    无 playwright）时跳过它，退回站外引擎兜底。谁先命中返回谁。
+    """
+    probes = []
+    if browser is not None:
+        probes.append(lambda n: _browser_site_hits(n, browser))
+    probes += [lambda n: _site_hits(n, fetcher),
+               lambda n: _bing_hits(n, fetcher),
+               lambda n: _ddg_hits(n, fetcher)]
+    for probe in probes:
         try:
-            hits = probe(name, fetcher)
+            hits = probe(name)
         except Exception:
             hits = []
         if hits:
@@ -61,9 +84,16 @@ def _search_hits(name, fetcher):
     return []
 
 
+def _browser_site_hits(name, browser):
+    html = browser.search_html(name)
+    return _parse_search_results(html)
+
+
 def _site_hits(name, fetcher):
-    html = fetcher.get_html(SEARCH_URL, method="POST",
-                            data={"searchkey": name, "t_frmsearch": "1"})
+    # 脚本化 requests 对 /S6/ 永久空壳；这里仅作一次廉价尝试（给未来服务端渲染留余地），
+    # 真正的可靠来源走浏览器 _browser_site_hits。
+    html = fetcher.get_html(SEARCH_URL, method="GET",
+                            params={"searchkey": name})
     return _parse_links(html)
 
 
@@ -100,6 +130,43 @@ def _parse_links(html):
         if not m:
             continue
         out.append(SearchHit(m.group(1), a.get_text(" ", strip=True)))
+    return out
+
+
+def _parse_search_results(html):
+    """解析【浏览器渲染后】的站点搜索结果页（权威来源）。
+
+    结果项是 div.search-result-list：每个含「封面图 / h2.tit 标题 / 书籍详情」三个指向同名的
+    /novel/{id} 链接。页面两侧另有「为您推荐」轮播（果青、在地下城…）也带 /novel/ 链接，
+    必须【框定在 search-result-list 内】，否则会把无关书当成候选。标题取 h2.tit a 文本
+    （高亮 span 已并入文本，如「无职转生 ～到了异世界就拿出真本事～」）。
+    """
+    soup = BeautifulSoup(html, "lxml")
+    out = []
+    seen = set()
+    for item in soup.select("div.search-result-list"):
+        a = item.select_one('a[href*="/novel/"]')
+        if a is None:
+            continue
+        m = re.search(r"/novel/(\d+)\.html", a.get("href", ""))
+        if not m:
+            continue
+        nid = m.group(1)
+        if nid in seen:
+            continue
+        seen.add(nid)
+        tit = item.select_one("h2.tit a") or item.select_one("h3 a")
+        # 用默认 get_text()（不在元素边界注入空格）：命中词常被包进 <span class="hot">，
+        # 若用 get_text(" ")，查询「无职」会被拼成「无职 转生」（高亮边界多出空格）。
+        # 默认拼接保真原始空白、且不在边界注入，正是想要的效果。
+        title = (tit.get_text() or "").strip() if tit else ""
+        if not title:
+            # 个别条目标题不在 h2/h3：取第一个「指向本站小说且有文字」的锚点。
+            anchor = next((x for x in item.select("a")
+                           if re.search(r"/novel/\d+\.html", x.get("href", ""))
+                           and (x.get_text() or "").strip()), None)
+            title = (anchor.get_text() or "").strip() if anchor else item.get_text(" ", strip=True)
+        out.append(SearchHit(nid, title))
     return out
 
 
@@ -166,7 +233,11 @@ def _ask_choose(name, hits):
         mark = "  (书名吻合)" if i - 1 == exact else ""
         print(f"  [{i}] {h.title}  (id={h.id}){mark}")
     default = exact + 1
-    raw = input(f"输入序号（回车选 [{default}]）: ").strip()
+    try:
+        raw = input(f"输入序号（回车选 [{default}]）: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        # stdin 被判定为 TTY 但实际无法读取（脚本/管道）时，退回默认候选，避免崩溃。
+        return hits[exact]
     if raw.isdigit() and 1 <= int(raw) <= len(hits):
         return hits[int(raw) - 1]
     return hits[exact]

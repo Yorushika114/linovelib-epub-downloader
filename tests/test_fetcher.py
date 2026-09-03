@@ -2,7 +2,7 @@ import io
 import requests
 import pytest
 from PIL import Image
-from linovelib.fetcher import Fetcher
+from linovelib.fetcher import Fetcher, CloudflareBlockedError
 
 
 class FakeResp:
@@ -130,3 +130,33 @@ def test_get_retries_429_then_succeeds(monkeypatch):
     f = Fetcher(delay=0, retries=3, session=s)
     assert f.get_html("http://x") == "<html>ok</html>"
     assert s.calls == 2  # 一次 429，一次 200
+
+
+# ---- Cloudflare 按 URL 封禁整本小说（403 Attention Required）----
+_CF_BLOCK_HTML = ("<html><head><title>Attention Required! | Cloudflare</title>"
+                  "</head><body><h1>Sorry, you have been blocked</h1></body></html>")
+CF_BLOCK_TEXT = _CF_BLOCK_HTML.replace("<html>", "<html>\n<!DOCTYPE html>", 1)
+
+
+def _cf_block_resp(status=403):
+    return FakeResp(_CF_BLOCK_HTML.encode("utf-8"), status=status)
+
+
+def test_is_cloudflare_block_detects_attention_required():
+    from linovelib.fetcher import _is_cloudflare_block
+    assert _is_cloudflare_block(_cf_block_resp()) is True
+
+
+def test_is_cloudflare_block_rejects_normal_403():
+    from linovelib.fetcher import _is_cloudflare_block
+    # 普通 403（非 Cloudflare 拦截页）不应误判为整本封禁——仍走正常重试/报错路径。
+    assert _is_cloudflare_block(FakeResp(b"forbidden", status=403)) is False
+
+
+def test_get_html_raises_cloudflare_blocked_fast():
+    # 整本被 Cloudflare 封禁：一把就抛 CloudflareBlockedError，不重试、不刷屏。
+    s = FakeSession([_cf_block_resp(), FakeResp()])
+    f = Fetcher(delay=0, retries=3, session=s)
+    with pytest.raises(CloudflareBlockedError):
+        f.get_html("http://x")
+    assert s.calls == 1  # 命中即出，不再用剩余重试去试失败页

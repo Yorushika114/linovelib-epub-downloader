@@ -106,6 +106,30 @@ _MAX_BACKOFF = 4
 _429_WAIT = 3
 _429_MAXWAIT = 30
 
+# 站点对【个别整本小说】的 /novel/{nid}/ 页面统一返回 403 + Cloudflare 的静态
+# 「Attention Required! | Cloudflare」拦截页——这是按 URL 规则的防火墙封禁（多为主流授权/
+# 被要求下架的作品，如 无职转生 主篇 id=2013）。它不是临时网络错误：对同一本书的落地页、
+# 目录页、卷页、章节页每一页都命中，重试（加头、换浏览器渲染、带 cf_clearance cookie）
+# 都无法拿下——只有换一个未被屏蔽的编号/卷才是出路。抓取器识别到该拦截页即抛出专用异常，
+# 让上层给出明确提示，而不是一路抛出「403 Client Error」原始异常。
+class CloudflareBlockedError(Exception):
+    """一个特定编号的整本小说页面被站点 Cloudflare 防火墙按 URL 规则封禁。"""
+
+
+def _is_cloudflare_block(resp):
+    """判断响应是否为 Cloudflare 的静态「Attention Required!」硬拦截页。
+
+    只看响应状态/正文，不动网络。返回 True 表示这一整本的页面被站点封禁，应尽快
+    停止并对用户给出明确提示（换用可下载的编号/卷），而非当作普通 403/坏页重试。
+    """
+    if getattr(resp, "status_code", None) != 403:
+        return False
+    try:
+        text = getattr(resp, "text", "") or ""
+    except Exception:
+        return False
+    return "Attention Required" in text and "cloudflare" in text.lower()
+
 
 def _backoff(attempt, exc):
     """计算重试前的等待秒数（始终有界）。
@@ -350,6 +374,12 @@ class Fetcher:
                 else:
                     resp = self.session.request(method, url, timeout=self.timeout,
                                                 headers=headers, **kw)
+                if _is_cloudflare_block(resp):
+                    # 整本小说的页面被站点防火墙按 URL 规则封禁：不是瞬时错误，重试/换头/唤
+                    # 浏览器都无解。立即停止并对用户给出明确提示，而不是当作坏页反复重试——
+                    # 否则一整个编号的所有页码都会各自重试 retries 次，白白拖延并刷屏。
+                    raise CloudflareBlockedError(
+                        f"{url} 被站点 Cloudflare 防火墙拦截（403 Attention Required）")
                 resp.raise_for_status()
                 return resp
             except requests.RequestException as e:

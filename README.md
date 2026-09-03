@@ -73,7 +73,7 @@ python main.py --novel 3095 --volumes 1 --out output/book.epub
 # 下载全部卷
 python main.py --novel 3095 --vol all
 
-# 按书名搜索（站点搜索失败会回退 Bing / DuckDuckGo 的 site: 搜索解析编号）
+# 按书名搜索（用真实浏览器渲染本站搜索 /S6/?searchkey= 解析编号；无浏览器时回退 Bing / DuckDuckGo 的 site: 搜索）
 python main.py --name "败北女角太多了"
 
 # --novel 也接受书名：非纯数字时自动按书名搜索
@@ -88,7 +88,7 @@ python main.py --novel 3095
 | 参数 | 说明 |
 |---|---|
 | `--novel` | 小说编号，如 `3095`（来自小说页 URL `/novel/3095.html`） |
-| `--name` | 小说书名（自动搜索解析编号；站点搜索失败会回退 Bing / DuckDuckGo 的 `site:` 搜索） |
+| `--name` | 小说书名（用真实浏览器渲染本站搜索解析编号；无浏览器时回退 Bing / DuckDuckGo 的 `site:` 搜索） |
 | `--volumes` | 选择卷（从 1 开始，逗号分隔，如 `1,3,5`） |
 | `--vol all` | 下载全部卷 |
 | `--out` | 输出 `.epub` 路径；未传入时写入项目根目录的 `download/<书名>/` |
@@ -129,7 +129,7 @@ python main.py --novel 3095
 
 ## 说明
 
-- 站点搜索接口对脚本化请求可能返回空，`--name` 会自动回退到 Bing / DuckDuckGo 的 `site:linovelib.com` 搜索来解析编号；搜出多个候选时会把书名和编号列出来让你选。仍属 best-effort（外部引擎可能限流），稳定做法是直接给出 `--novel 编号`。
+- 按书名搜索时用真实浏览器（`RenderFetcher`，系统 Edge，headless）渲染本站搜索 `/S6/?searchkey=书名` 解析编号——这是最可靠的来源（本站自搜、结果准确）。站点搜索只对真实浏览器返回结果，脚本化 `requests` 会拿到空页；而站外引擎 Bing / DuckDuckGo 的 `site:linovelib.com` 经常限流、索引缺失或静默放宽 `site:` 操作符，仅作无浏览器环境的兜底。搜出多个候选时（可通过 TTY）会把书名和编号列出来让你选。若浏览器不可用，稳定做法是直接给出 `--novel 编号`。
 - 章节存在分页（`第X页`），已自动合并为单个 EPUB 章节。
 - 请遵守目标网站的使用规则与版权要求，并设置合理请求间隔。
 - 网站页面或保护策略变化时，生成结果应先自行核验；本项目不保证第三方网站内容的完整性或顺序正确性。

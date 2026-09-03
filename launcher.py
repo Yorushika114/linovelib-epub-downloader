@@ -1,5 +1,6 @@
 import sys
-from main import main
+from main import main, _resolve_identifier
+from linovelib.resolver import ResolveError
 
 
 def _prompt(label):
@@ -19,6 +20,19 @@ def _launch():
         if not nid or nid.strip().lower() in ("q", "quit", "exit"):
             print("已退出循环。")
             return 0
+
+        # 书名：先在解析阶段筛出确定编号（多候选时在此让用户选择），再进入卷数选择；
+        # 编号：直达卷数选择，不启动浏览器。
+        if not nid.isdigit():
+            print("\n书名搜索解析中……")
+            print()
+            try:
+                nid = _resolve_identifier(nid)
+            except ResolveError as e:
+                print(e)
+                continue
+            print(f"已选定小说编号：{nid}")
+            print()
 
         vol = _prompt("请输入卷数(多个用逗号分隔，支持区间如 1-3,5；全部输入 all): ")
         if not vol:
