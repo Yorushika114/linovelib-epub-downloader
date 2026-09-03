@@ -33,11 +33,11 @@
     </Border>
 
     <Grid Grid.Column="2" Margin="42,30,48,28"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
-      <StackPanel><TextBlock Text="下载轻小说" FontSize="28" FontWeight="SemiBold" Foreground="#17212D"/><TextBlock Text="输入小说编号与卷号，下载过程会在此处持续显示。" Foreground="#76808D" Margin="0,8,0,20"/></StackPanel>
+      <StackPanel><TextBlock Text="下载轻小说" FontSize="28" FontWeight="SemiBold" Foreground="#17212D"/><TextBlock Text="输入小说编号（或书名）与卷号，下载过程会在此处持续显示。" Foreground="#76808D" Margin="0,8,0,20"/></StackPanel>
       <Border Grid.Row="1" Height="1" Background="#E8EBEF"/>
       <Border Grid.Row="2" Background="#F8FAFB" BorderBrush="#E5E9ED" BorderThickness="1" CornerRadius="14" Padding="20" Margin="0,22,0,14"><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-        <TextBlock Text="小说编号" Foreground="#505B68"/><TextBlock Grid.Column="1" Text="卷号" Foreground="#505B68"/><TextBlock Grid.Column="2" Text="请求间隔（秒）" Foreground="#505B68"/><TextBlock Grid.Column="3" Text="输出 EPUB（可选）" Foreground="#505B68"/>
-        <TextBox x:Name="NovelIdBox" Grid.Row="1" Style="{StaticResource Input}" Margin="0,7,12,0" ToolTip="例如：3095"/>
+        <TextBlock Text="小说编号 / 书名" Foreground="#505B68"/><TextBlock Grid.Column="1" Text="卷号" Foreground="#505B68"/><TextBlock Grid.Column="2" Text="请求间隔（秒）" Foreground="#505B68"/><TextBlock Grid.Column="3" Text="输出 EPUB（可选）" Foreground="#505B68"/>
+        <TextBox x:Name="NovelIdBox" Grid.Row="1" Style="{StaticResource Input}" Margin="0,7,12,0" ToolTip="编号如 3095，或直接输入书名（自动搜索）"/>
         <TextBox x:Name="VolumesBox" Grid.Row="1" Grid.Column="1" Style="{StaticResource Input}" Margin="0,7,12,0" Text="all"/>
         <TextBox x:Name="DelayBox" Grid.Row="1" Grid.Column="2" Style="{StaticResource Input}" Margin="0,7,12,0" Text="0.4"/>
         <Grid Grid.Row="1" Grid.Column="3" Margin="0,7,0,0"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBox x:Name="OutputBox" Style="{StaticResource Input}"/><Button Grid.Column="1" Style="{StaticResource OutlineButton}" Content="选择…" Margin="7,0,0,0" Click="ChooseOutput_Click"/></Grid>

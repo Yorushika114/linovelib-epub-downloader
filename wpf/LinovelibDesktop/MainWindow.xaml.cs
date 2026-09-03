@@ -22,7 +22,7 @@ public partial class MainWindow : Window
 
     private async void StartButton_Click(object sender, RoutedEventArgs e)
     {
-        if (string.IsNullOrWhiteSpace(NovelIdBox.Text)) { Report("请输入小说编号。"); return; }
+        if (string.IsNullOrWhiteSpace(NovelIdBox.Text)) { Report("请输入小说编号或书名。"); return; }
         if (!double.TryParse(DelayBox.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out var delay) || delay < 0) { Report("请求间隔必须是大于等于 0 的数字。"); return; }
 
         _rows.Clear(); _rowsById.Clear(); _lastLogLine = ""; LogBox.Clear(); Progress.Value = 0; Progress.Maximum = 1; ProgressText.Text = "0 / 0 章";
