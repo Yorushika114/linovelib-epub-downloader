@@ -95,3 +95,38 @@ def test_get_page_body_extracts_current_html_without_network_access():
     assert title == "序章"
     assert paragraphs == ["正确首段。", "正确后段。"]
     assert images == ["https://example.invalid/images/one.jpg"]
+
+
+# ---- 有界退避（429 / 封顶）----
+def _http_error(status, retry_after=None):
+    """构造携带响应状态码/头的 HTTPError（含 response 属性），供 _backoff 识别 429。"""
+    class R:
+        status_code = status
+        headers = {"Retry-After": str(retry_after)} if retry_after else {}
+    return requests.HTTPError("boom", response=R())
+
+
+def test_backoff_429_respects_retry_after():
+    from linovelib.fetcher import _backoff
+    assert _backoff(0, _http_error(429, retry_after=5)) == 5
+
+
+def test_backoff_429_caps_and_defaults():
+    from linovelib.fetcher import _backoff, _429_MAXWAIT
+    assert _backoff(0, _http_error(429, retry_after=999)) == _429_MAXWAIT  # 封顶
+    assert _backoff(0, _http_error(429)) == 3  # 无 Retry-After -> 短等
+
+
+def test_backoff_capped_exponential():
+    from linovelib.fetcher import _backoff, _MAX_BACKOFF
+    assert _backoff(0, _http_error(500)) == 1          # 2**0=1
+    assert _backoff(10, _http_error(500)) == _MAX_BACKOFF  # 指数封顶
+    assert _backoff(10, requests.ConnectionError("net")) == _MAX_BACKOFF  # 无响应也封顶
+
+
+def test_get_retries_429_then_succeeds(monkeypatch):
+    monkeypatch.setattr("linovelib.fetcher.time.sleep", lambda s: None)
+    s = FakeSession([_http_error(429), FakeResp()])
+    f = Fetcher(delay=0, retries=3, session=s)
+    assert f.get_html("http://x") == "<html>ok</html>"
+    assert s.calls == 2  # 一次 429，一次 200

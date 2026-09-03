@@ -97,6 +97,33 @@ def _all_paragraphs(nodes):
 
 _LINES_TRUNCATED = ("內容加載失敗", "内容加载失败", "請刷新或更換瀏覽器", "请刷新或更换浏览器")
 
+# 单次重试的退避封顶。旧实现 time.sleep(2**attempt) 在 main(retries=8) 下累积到
+# 1+2+4+…+128=255 秒：站点对高频访问会返回 429(Too Many Requests) 或 403(Cloudflare 挑战)，
+# 一个被限流的页（正文页或插图）就能硬等 4 分多钟，看起来就像「卡住/假死」。把指数收敛到
+# 几秒级，既保留对偶发网络错误/5xx 的重试，又不会让任何单页拖死整次下载。429 优先尊重
+# 服务器 Retry-After（限流信号，不是瞬时错误，短等即恢复）。
+_MAX_BACKOFF = 4
+_429_WAIT = 3
+_429_MAXWAIT = 30
+
+
+def _backoff(attempt, exc):
+    """计算重试前的等待秒数（始终有界）。
+
+    429：优先读服务器 Retry-After（封顶 _429_MAXWAIT），没有则固定 _429_WAIT；
+    其余错误：指数退避但被 _MAX_BACKOFF 封顶。任何情况单次等待都不会到分钟级。
+    """
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    if status == 429:
+        try:
+            ra = (exc.response.headers or {}).get("Retry-After")
+            if ra and str(ra).isdigit():
+                return min(int(ra), _429_MAXWAIT)
+        except Exception:
+            pass
+        return _429_WAIT
+    return min(2 ** attempt, _MAX_BACKOFF)
+
 
 def extract_paragraphs_from_html(html):
     """从纯请求 HTML 里取 #TextContent 下所有 <p> 段（乱序 R，先保持原始顺序）。"""
@@ -328,7 +355,7 @@ class Fetcher:
             except requests.RequestException as e:
                 last = e
                 if attempt < self.retries - 1:
-                    time.sleep(2 ** attempt)
+                    time.sleep(_backoff(attempt, e))
         raise last
 
     def get_html(self, url, **kw):
