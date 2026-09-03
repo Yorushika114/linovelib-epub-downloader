@@ -9,10 +9,13 @@ if errorlevel 1 (
     exit /b 1
 )
 
-dotnet run --project "wpf\LinovelibDesktop\LinovelibDesktop.csproj"
+dotnet build "wpf\LinovelibDesktop\LinovelibDesktop.csproj" --nologo --verbosity:minimal
 set "EXIT_CODE=%ERRORLEVEL%"
 if not "%EXIT_CODE%"=="0" (
-    echo [ERROR] The GUI exited with code %EXIT_CODE%.
+    echo [ERROR] The WPF application could not be built. Exit code %EXIT_CODE%.
     pause
+    exit /b %EXIT_CODE%
 )
-exit /b %EXIT_CODE%
+
+start "" "wpf\LinovelibDesktop\bin\Debug\net8.0-windows\LinovelibDesktop.exe"
+exit /b 0
