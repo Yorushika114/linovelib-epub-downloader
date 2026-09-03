@@ -128,7 +128,10 @@ def _fetch_page_ordered(url, index, fetcher):
         return _fetch_page_robust(url, index, fetcher)
 
     title, paras, imgs = get_page_body(url)
-    if paras:
+    # 有段落即有正文；若无段落但只要含插图，也是合法的「章节末尾插图页」（如 linovelib
+    # 结尾常有一整页只有插画、没有文字），同样收下该页的图，不能当无正文而整章丢弃。
+    # 只有「无段落且无插图」才是真正被反爬拦下/空页，此时才拒绝写入并报错。
+    if paras or imgs:
         return ChapterPage(index=index, url=url, title=title,
                            paragraphs=_dedup_keep_order(paras), image_urls=imgs)
     raise RuntimeError("未能读取有序正文，已拒绝写入可能乱序的备用内容")
