@@ -24,7 +24,14 @@ public sealed class DownloaderBridge
         };
         startInfo.ArgumentList.Add(Path.Combine(root, "wpf_bridge.py"));
         startInfo.ArgumentList.Add("--novel"); startInfo.ArgumentList.Add(request.NovelId);
-        startInfo.ArgumentList.Add("--volumes"); startInfo.ArgumentList.Add(request.Volumes);
+        if (string.Equals(request.Volumes, "all", StringComparison.OrdinalIgnoreCase))
+        {
+            startInfo.ArgumentList.Add("--vol"); startInfo.ArgumentList.Add("all");
+        }
+        else
+        {
+            startInfo.ArgumentList.Add("--volumes"); startInfo.ArgumentList.Add(request.Volumes);
+        }
         startInfo.ArgumentList.Add("--delay"); startInfo.ArgumentList.Add(request.Delay);
         if (!string.IsNullOrWhiteSpace(request.OutputPath))
         {
