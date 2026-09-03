@@ -32,6 +32,7 @@ python -m pip install -r requirements.txt
 3. 选择一种启动方式：
 
    - **交互式（推荐）**：双击 `download.bat`，或在终端执行 `python launcher.py`。
+   - **Windows 图形界面**：在终端执行 `python desktop_gui.py`。可填写小说编号、卷号和输出位置；下载会在后台运行，窗口会显示总体进度、当前章节、各章节完成/失败状态，并可在章节之间安全取消。
    - **命令行**：在终端直接执行 `python main.py` 并附加参数，适合固定配置或批量运行。
 
 ### 交互式设置
@@ -44,6 +45,18 @@ python -m pip install -r requirements.txt
 3. 每个章节完成时会显示进度；本次任务结束后会回到编号输入处，可继续下载另一部小说。输入 `q` 或直接回车退出。
 
 默认生成的 EPUB 位于项目根目录下的 `download/<小说名>/`。缓存位于 `_tmp_dl/`，两者都不上传到 GitHub。
+
+### Windows 图形界面
+
+运行以下命令启动桌面界面：
+
+```powershell
+python desktop_gui.py
+```
+
+界面默认下载全部卷；可把“卷号”改为 `1-3,5` 等范围。开始后，进度条显示已处理章节数，章节表会实时标为“等待中 / 下载中 / 已完成 / 失败”。点击“取消下载”会等待当前章节处理完毕后停止，不会强制终止 Python。背景图是项目内置的原创轻小说风格插画，不联网加载。
+
+如果执行 `desktop_gui.py` 时提示缺少 Tk，请在安装 Python 时勾选 **tcl/tk and IDLE** 组件，或使用包含 Tkinter 的官方 Python 安装包。
 
 ### 常用设置速查
 

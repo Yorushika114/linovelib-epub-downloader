@@ -23,3 +23,12 @@ def test_state_tracks_pending_started_finished_and_failure():
     assert state.rows["2"].status == "失败"
     assert (state.completed, state.total) == (1, 2)
     assert state.status_text == "第二章下载失败：timeout"
+
+
+def test_state_surfaces_worker_error_message():
+    state_module = importlib.import_module("linovelib.gui_state")
+    state = state_module.GuiDownloadState()
+
+    state.apply(DownloadEvent("worker_failed", message="network unavailable"))
+
+    assert state.status_text == "下载任务异常：network unavailable"

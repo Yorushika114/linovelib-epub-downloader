@@ -56,6 +56,9 @@ class GuiDownloadState:
             self.completed = event.completed
             self.status_text = event.message or "下载已取消。"
             self.finished = True
+        elif event.kind == "worker_failed":
+            self.status_text = f"下载任务异常：{event.message}"
+            self.finished = True
         elif event.kind == "finished":
             self.completed = event.completed
             self.status_text = event.message or "下载结束。"
