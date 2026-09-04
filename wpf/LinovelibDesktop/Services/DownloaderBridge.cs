@@ -33,7 +33,7 @@ public sealed class DownloaderBridge
         if (!_process.Start()) throw new InvalidOperationException("无法启动 Python 下载桥接进程。");
 
         var stdoutTask = ReadEventsAsync(_process, onEvent, onLog);
-        var stderrTask = ReadErrorsAsync(_process, onLog);
+        var stderrTask = ReadErrorsAsync(_process, onEvent, onLog);
         await Task.WhenAll(stdoutTask, stderrTask, _process.WaitForExitAsync());
         var exitCode = _process.ExitCode;
         _process.Dispose();
@@ -96,17 +96,44 @@ public sealed class DownloaderBridge
     {
         while (await process.StandardOutput.ReadLineAsync() is { } line)
         {
-            try
-            {
-                var item = JsonSerializer.Deserialize<DownloadEventDto>(line, JsonOptions);
-                if (item is not null) onEvent(item);
-            }
-            catch (JsonException) { onLog(line); }
+            RouteBridgeLine(line, onEvent, onLog);
         }
     }
 
-    private static async Task ReadErrorsAsync(Process process, Action<string> onLog)
+    private static async Task ReadErrorsAsync(Process process, Action<DownloadEventDto> onEvent, Action<string> onLog)
     {
-        while (await process.StandardError.ReadLineAsync() is { } line) onLog(line);
+        while (await process.StandardError.ReadLineAsync() is { } line)
+        {
+            RouteBridgeLine(line, onEvent, onLog);
+        }
+    }
+
+    private static void RouteBridgeLine(string line, Action<DownloadEventDto> onEvent, Action<string> onLog)
+    {
+        // Python 在某些宿主下可能把协议行写到 stderr，或在首行带 UTF-8 BOM。
+        // 两个流统一先按事件解析，避免把 JSON 协议直接泄露到用户日志区。
+        var payload = line.TrimStart('\uFEFF');
+        if (!payload.TrimStart().StartsWith("{", StringComparison.Ordinal))
+        {
+            onLog(line);
+            return;
+        }
+
+        try
+        {
+            var item = JsonSerializer.Deserialize<DownloadEventDto>(payload, JsonOptions);
+            if (item is not null && !string.IsNullOrWhiteSpace(item.Kind))
+            {
+                onEvent(item);
+                return;
+            }
+        }
+        catch (JsonException)
+        {
+            onLog("下载进度事件格式异常，已忽略。");
+            return;
+        }
+
+        onLog("下载进度事件格式异常，已忽略。");
     }
 }

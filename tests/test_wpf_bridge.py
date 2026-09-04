@@ -30,3 +30,11 @@ def test_cancel_reader_sets_event_when_cancel_line_arrives():
     read_cancel_commands(io.StringIO("ignore\ncancel\n"), cancelled)
 
     assert cancelled.is_set()
+
+
+def test_wpf_never_displays_raw_download_event_json_as_a_log_line():
+    """协议事件即使从错误流抵达，也必须优先用于更新界面而非污染日志。"""
+    assert "RouteBridgeLine" in BRIDGE
+    assert "ReadErrorsAsync(_process, onEvent, onLog)" in BRIDGE
+    assert '"下载进度事件格式异常，已忽略。"' in BRIDGE
+    assert "catch (JsonException) { onLog(line); }" not in BRIDGE
