@@ -1,9 +1,14 @@
 import io
 import json
 import threading
+from pathlib import Path
 
 from linovelib.events import DownloadEvent
 from wpf_bridge import event_to_json, read_cancel_commands
+
+
+ROOT = Path(__file__).parents[1]
+BRIDGE = (ROOT / "wpf" / "LinovelibDesktop" / "Services" / "DownloaderBridge.cs").read_text(encoding="utf-8")
 
 
 def test_event_json_is_one_line_and_preserves_chinese_text():

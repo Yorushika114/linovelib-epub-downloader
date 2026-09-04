@@ -7,3 +7,5 @@ pytest>=7.4
 # 正文抓取用真实浏览器渲染（linovelib 对纯请求返回打乱的假内容），
 # RenderFetcher 复用系统 Edge/Chrome，无需单独下载浏览器。
 playwright>=1.44
+# 正文浏览器路径的可选实现；便携构建会一并冻结，供系统 Edge 使用。
+DrissionPage>=4.1

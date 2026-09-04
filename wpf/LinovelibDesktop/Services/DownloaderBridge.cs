@@ -13,17 +13,7 @@ public sealed class DownloaderBridge
 
     public async Task<int> StartAsync(DownloadRequest request, Action<DownloadEventDto> onEvent, Action<string> onLog)
     {
-        var root = ProjectPaths.FindRoot();
-        var startInfo = new ProcessStartInfo(ProjectPaths.FindPython(root))
-        {
-            WorkingDirectory = root,
-            UseShellExecute = false,
-            RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            CreateNoWindow = true,
-        };
-        startInfo.ArgumentList.Add(Path.Combine(root, "wpf_bridge.py"));
+        var startInfo = CreateBridgeStartInfo();
         startInfo.ArgumentList.Add("--novel"); startInfo.ArgumentList.Add(request.NovelId);
         if (string.Equals(request.Volumes, "all", StringComparison.OrdinalIgnoreCase))
         {
@@ -63,17 +53,7 @@ public sealed class DownloaderBridge
     /// <summary>仅按书名解析候选列表（不下载），供 WPF 先做书名筛选，再进入卷数/下载。</summary>
     public async Task<List<ResolveResultDto>> ResolveAsync(string text)
     {
-        var root = ProjectPaths.FindRoot();
-        var startInfo = new ProcessStartInfo(ProjectPaths.FindPython(root))
-        {
-            WorkingDirectory = root,
-            UseShellExecute = false,
-            RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            CreateNoWindow = true,
-        };
-        startInfo.ArgumentList.Add(Path.Combine(root, "wpf_bridge.py"));
+        var startInfo = CreateBridgeStartInfo();
         startInfo.ArgumentList.Add("--resolve");
         startInfo.ArgumentList.Add(text);
 
@@ -94,6 +74,22 @@ public sealed class DownloaderBridge
         await process.WaitForExitAsync();
         await stderrTask;
         return results.Where(r => r.Kind == "search_hit").ToList();
+    }
+
+    private static ProcessStartInfo CreateBridgeStartInfo()
+    {
+        var root = ProjectPaths.FindRoot();
+        var startInfo = new ProcessStartInfo(ProjectPaths.FindPython(root))
+        {
+            WorkingDirectory = root,
+            UseShellExecute = false,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true,
+        };
+        startInfo.ArgumentList.Add(Path.Combine(root, "wpf_bridge.py"));
+        return startInfo;
     }
 
     private static async Task ReadEventsAsync(Process process, Action<DownloadEventDto> onEvent, Action<string> onLog)

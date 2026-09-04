@@ -13,6 +13,7 @@ download/
 *.epub
 artifacts/
 .worktrees/
+docs/local/
 
 # Local diagnostics and editor files
 tmp_*

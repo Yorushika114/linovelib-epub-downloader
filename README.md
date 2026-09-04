@@ -32,7 +32,7 @@ python -m pip install -r requirements.txt
 3. 选择一种启动方式：
 
    - **交互式（推荐）**：双击 `download.bat`，或在终端执行 `python launcher.py`。
-   - **Windows WPF 图形界面**：双击 `start_wpf_ui.bat`。首次启动会构建本地 WPF 程序；界面会显示实际待下载章节、进度和安全取消状态。
+   - **Windows WPF 图形界面**：双击 `轻小说下载器.exe`。它会构建并启动当前项目的 WPF 源码；界面会显示实际待下载章节、进度和安全取消状态。
    - **命令行**：在终端直接执行 `python main.py` 并附加参数，适合固定配置或批量运行。
 
 ### 交互式设置
@@ -48,7 +48,7 @@ python -m pip install -r requirements.txt
 
 ### Windows WPF 图形界面
 
-双击项目根目录的 `start_wpf_ui.bat` 启动桌面界面。它会检查 .NET 8 SDK、构建 WPF 程序后独立打开窗口；若窗口已经打开，则会直接激活现有窗口而不会重复构建。
+双击项目根目录的 `轻小说下载器.exe` 启动桌面界面。它会使用本机 .NET SDK 构建项目中的 WPF 源码后独立打开窗口；若窗口已经打开，则会直接激活现有窗口而不会重复构建。该 EXE 不包含下载器代码或数据，下载、缓存和配置均继续使用当前项目目录。
 
 界面默认下载全部卷；可把“卷号”改为 `1-3,5` 等范围。开始后，表格会列出未生成 EPUB 的剩余章节，并实时标为“等待中 / 下载中 / 已完成 / 失败”。点击“安全取消”会在准备阶段或当前章节边界停止，不会强制终止 Python。
 
@@ -111,7 +111,7 @@ python main.py --novel 3095
 ├─ docs/                  # 发布设计与实施记录
 ├─ main.py                # 命令行入口
 ├─ launcher.py            # Windows 交互式入口
-├─ start_wpf_ui.bat       # Windows WPF 界面启动器
+├─ 轻小说下载器.exe          # Windows WPF 源码界面启动器
 ├─ download.bat           # Windows 批处理启动器
 ├─ wpf/                   # WPF 桌面界面项目
 ├─ requirements.txt       # Python 依赖
