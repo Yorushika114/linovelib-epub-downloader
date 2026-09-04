@@ -54,7 +54,7 @@ python -m pip install -r requirements.txt
 
 #### 项目展示
 
-![WPF 下载任务界面示例](docs/images/wpf-ui-example.png)
+![WPF 下载任务界面示例](docs/images/wpf-ui-example-v1.0.5.png)
 
 ### 常用设置速查
 
