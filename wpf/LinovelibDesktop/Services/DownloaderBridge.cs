@@ -10,6 +10,7 @@ public sealed class DownloaderBridge
 {
     private Process? _process;
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
+    private const int ResolveTimeoutSeconds = 60;
 
     public async Task<int> StartAsync(DownloadRequest request, Action<DownloadEventDto> onEvent, Action<string> onLog)
     {
@@ -60,20 +61,56 @@ public sealed class DownloaderBridge
         using var process = new Process { StartInfo = startInfo };
         if (!process.Start()) throw new InvalidOperationException("无法启动 Python 搜索桥接进程。");
 
+        // 给整个解析过程加硬性时限：站内搜索 / 站外引擎（Bing、DDG）或 Edge 关闭偶发挂起时，
+        // 不能让 SearchButton 一直被禁用导致「无法继续搜索」。超时则终止整棵进程树并返回空。
+        var deadline = Task.Delay(TimeSpan.FromSeconds(ResolveTimeoutSeconds));
         var stderrTask = process.StandardError.ReadToEndAsync();
         var results = new List<ResolveResultDto>();
-        while (await process.StandardOutput.ReadLineAsync() is { } line)
+        try
         {
-            try
+            // 读完输出行直到 stdout EOF；一旦超时立刻终结进程，避免界面卡死。
+            while (true)
             {
-                var item = JsonSerializer.Deserialize<ResolveResultDto>(line, JsonOptions);
-                if (item is not null) results.Add(item);
+                var readLine = process.StandardOutput.ReadLineAsync();
+                var finished = await Task.WhenAny(readLine, deadline);
+                if (finished == deadline)
+                {
+                    TryKill(process);
+                    return results.Where(r => r.Kind == "search_hit").ToList();
+                }
+                var line = await readLine;
+                if (line is null) break; // stdout EOF
+                try
+                {
+                    var item = JsonSerializer.Deserialize<ResolveResultDto>(line, JsonOptions);
+                    if (item is not null) results.Add(item);
+                }
+                catch (JsonException) { }
             }
-            catch (JsonException) { }
+            // stdout 已 EOF，但仍可能卡在进程退出（如 Edge 关闭）。同样交给时限收尾。
+            await Task.WhenAny(process.WaitForExitAsync(), deadline);
+            if (!process.HasExited) TryKill(process);
+            await stderrTask;
         }
-        await process.WaitForExitAsync();
-        await stderrTask;
+        catch
+        {
+            TryKill(process);
+            throw;
+        }
         return results.Where(r => r.Kind == "search_hit").ToList();
+    }
+
+    /// <summary>把还活着的解析进程连子进程一起杀掉（Playwright/Edge 等子进程一并结束）。</summary>
+    private static void TryKill(Process process)
+    {
+        try
+        {
+            if (!process.HasExited) process.Kill(entireProcessTree: true);
+        }
+        catch
+        {
+            // 进程已退出或无权结束：忽略，界面仍会在 finally 里恢复搜索按钮。
+        }
     }
 
     private static ProcessStartInfo CreateBridgeStartInfo()
