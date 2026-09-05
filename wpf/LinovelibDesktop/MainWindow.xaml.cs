@@ -1,4 +1,6 @@
 using System.Collections.ObjectModel;
+using System.Diagnostics;
+using System.IO;
 using System.Windows.Data;
 using System.Globalization;
 using System.Linq;
@@ -54,6 +56,29 @@ public partial class MainWindow : Window
 
     private void CancelButton_Click(object sender, RoutedEventArgs e) { _bridge.RequestCancel(); CancelButton.IsEnabled = false; StatusText.Text = "将在当前章节完成后安全取消。"; AppendLog("已请求安全取消。"); }
     private void ChooseOutput_Click(object sender, RoutedEventArgs e) { var dialog = new SaveFileDialog { Filter = "EPUB 文件|*.epub", DefaultExt = ".epub" }; if (dialog.ShowDialog(this) == true) OutputBox.Text = dialog.FileName; }
+
+    private void OpenDownloadsButton_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var directory = Path.Combine(ProjectPaths.FindRoot(), "download");
+            Directory.CreateDirectory(directory);
+            // Explicit Explorer invocation avoids custom default folder actions (e.g. terminals).
+            var explorer = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "explorer.exe");
+            var startInfo = new ProcessStartInfo(explorer)
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            };
+            startInfo.ArgumentList.Add(directory);
+            Process.Start(startInfo);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, $"无法打开下载目录：{ex.Message}", "打开下载目录",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
 
     private async void SearchButton_Click(object sender, RoutedEventArgs e)
     {
