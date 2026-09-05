@@ -115,6 +115,31 @@ def test_browser_broken_falls_back_to_engine():
     assert search_by_name("无职转生", f, browser=BadBrowser()) == "2013"
 
 
+def test_browser_authoritative_empty_stops_fallthrough():
+    # 浏览器站点搜索【成功返回空】（站点明确「查无此书」）即权威结论并立即终止，
+    # 不再回落站外引擎——否则用户在国内网络下会被 Bing/DDG 长时间拖住，表现为
+    # 「按书名搜索无结果后无法继续搜索/卡死」。
+    class EmptySearchHtml:
+        def search_html(self, name):
+            return "<html><body>没有找到相关作品</body></html>"
+
+    f = FakeFetcher([])  # 若错误回落到外部引擎，get_html 会因弹空列表抛 IndexError
+    assert _search_hits("不存在的书名", f, browser=EmptySearchHtml()) == []
+    assert f.calls == []  # 权威空结果不应触发任何外部请求
+
+
+def test_browser_cf_challenge_falls_back_to_external():
+    # 浏览器返回 Cloudflare 硬拦截页（Attention Required）不是「查无此书」：
+    # 应把它当作「无法判定」，静默回落站外引擎兜底，而不是误报未找到。
+    class CfChallengeBrowser:
+        def search_html(self, name):
+            return "<html><title>Attention Required! | Cloudflare</title></html>"
+
+    f = FakeFetcher([('<a href="/novel/2013.html">无职转生</a>').encode("utf-8")])
+    hits = _search_hits("无职转生", f, browser=CfChallengeBrowser())
+    assert [h.id for h in hits] == ["2013"]
+
+
 def test_multiple_candidates_prefers_exact_title(monkeypatch):
     monkeypatch.setattr("sys.stdin.isatty", lambda: False)
     html = ('<a href="/novel/3095.html">败北女角太多了</a>'
