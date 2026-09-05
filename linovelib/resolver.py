@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from urllib.parse import unquote
 from bs4 import BeautifulSoup
 from .catalog import parse_novel_page
+from .fetcher import CloudflareBlockedError
 from .models import Novel
 
 SEARCH_URL = "https://www.linovelib.com/S6/"
@@ -62,19 +63,23 @@ def is_exact_match(query, title):
 
 
 def _search_hits(name, fetcher, browser=None):
-    """返回去重后的候选命中列表；依次尝试【浏览器站点搜索】→ 站点接口 → Bing → DuckDuckGo。
+    """返回去重后的候选命中列表；【浏览器站点搜索优先且权威】。
 
     浏览器站点搜索是最可靠、最权威的来源（本站自搜、参考无关）：直接 hit 到本站结果，
-    不受站外引擎限流/索引缺失/静默放宽 site: 影响。传入的 browser 为 None（如纯脚本环境、
-    无 playwright）时跳过它，退回站外引擎兜底。谁先命中返回谁。
+    不受站外引擎限流/索引缺失/静默放宽 site: 影响。为此，当浏览器【成功返回】结果集时
+    ——哪怕是空列表（站点明确「查无此书」）就以此为最终结论并立即终止，不再落到站外引擎
+    去碰运气：站外引擎慢、会被限流，还可能返回过期/错误索引（把一个已更名或下架的书误判
+    为命中）。只有浏览器缺失（browser 为 None，如纯脚本环境、无 playwright）或【抛错】
+    （启动失败 / 搜索页被 Cloudflare 挑战）时，才静默退回站外引擎兜底。谁先命中返回谁。
     """
-    probes = []
     if browser is not None:
-        probes.append(lambda n: _browser_site_hits(n, browser))
-    probes += [lambda n: _site_hits(n, fetcher),
-               lambda n: _bing_hits(n, fetcher),
-               lambda n: _ddg_hits(n, fetcher)]
-    for probe in probes:
+        try:
+            return _dedupe(_browser_site_hits(name, browser))
+        except Exception:
+            pass  # 浏览器路径整体不可用 → 退回站外引擎兜底；不把异常冒到上层。
+    for probe in (lambda n: _site_hits(n, fetcher),
+                  lambda n: _bing_hits(n, fetcher),
+                  lambda n: _ddg_hits(n, fetcher)):
         try:
             hits = probe(name)
         except Exception:
@@ -86,7 +91,21 @@ def _search_hits(name, fetcher, browser=None):
 
 def _browser_site_hits(name, browser):
     html = browser.search_html(name)
+    if _looks_like_cf_challenge(html):
+        # 搜索页被 Cloudflare 挑战（返回硬拦截页而非结果页）：这不是「查无此书」，
+        # 不能当成权威空结果。抛出让 _search_hits 回退站外引擎兜底。
+        raise CloudflareBlockedError("站点搜索页被 Cloudflare 挑战，无法判定结果")
     return _parse_search_results(html)
+
+
+def _looks_like_cf_challenge(html):
+    """识别搜索页是否为 Cloudflare 硬拦截页（Attention Required）。
+
+    仅当命中与 fetcher 一致的「Attention Required + cloudflare」标记时判定为被拦；
+    查询无结果页不含该标记，不受影响。
+    """
+    text = html or ""
+    return "Attention Required" in text and "cloudflare" in text.lower()
 
 
 def _site_hits(name, fetcher):
