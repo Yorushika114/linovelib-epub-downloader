@@ -44,6 +44,15 @@ def test_wpf_log_panel_is_height_limited_and_scrollable():
     assert 'VerticalScrollBarVisibility="Auto"' in log_box
 
 
+def test_wpf_scrolls_to_the_latest_log_after_the_panel_becomes_visible():
+    """折叠期间累计的日志在展开后必须定位到末尾。"""
+    toggle_body = CODE.split("private void LogToggleButton_Click", 1)[1].split("private string _filter", 1)[0]
+
+    assert "ScrollLogToEndAfterLayout();" in toggle_body
+    assert "private void ScrollLogToEndAfterLayout()" in CODE
+    assert "DispatcherPriority.Background" in CODE
+
+
 def test_wpf_default_window_fits_a_1280_by_720_work_area():
     assert 'Width="1180"' in XAML
     assert 'Height="650"' in XAML
