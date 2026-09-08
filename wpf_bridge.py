@@ -12,6 +12,8 @@ from typing import TextIO
 import main as downloader_main
 from linovelib.events import DownloadEvent
 
+EVENT_PREFIX = "@@LINOVELIB_EVENT@@"
+
 
 def event_to_json(event: DownloadEvent) -> str:
     """Encode one download event as one UTF-8-safe JSON line."""
@@ -19,7 +21,7 @@ def event_to_json(event: DownloadEvent) -> str:
         _camel_case(key): value
         for key, value in dataclasses.asdict(event).items()
     }
-    return json.dumps(payload, ensure_ascii=False)
+    return EVENT_PREFIX + json.dumps(payload, ensure_ascii=False)
 
 
 def _camel_case(key: str) -> str:

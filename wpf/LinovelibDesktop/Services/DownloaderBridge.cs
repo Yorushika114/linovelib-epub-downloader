@@ -10,6 +10,7 @@ public sealed class DownloaderBridge
 {
     private Process? _process;
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
+    private const string EventPrefix = "@@LINOVELIB_EVENT@@";
     private const int ResolveTimeoutSeconds = 60;
 
     public async Task<int> StartAsync(DownloadRequest request, Action<DownloadEventDto> onEvent, Action<string> onLog)
@@ -148,13 +149,15 @@ public sealed class DownloaderBridge
     private static void RouteBridgeLine(string line, Action<DownloadEventDto> onEvent, Action<string> onLog)
     {
         // Python 在某些宿主下可能把协议行写到 stderr，或在首行带 UTF-8 BOM。
-        // 两个流统一先按事件解析，避免把 JSON 协议直接泄露到用户日志区。
-        var payload = line.TrimStart('\uFEFF');
-        if (!payload.TrimStart().StartsWith("{", StringComparison.Ordinal))
+        // 只有显式协议前缀后的 JSON 才是下载事件；普通日志即使以 { 开头也保持为日志。
+        var payload = line.TrimStart('\uFEFF').TrimStart();
+        if (!payload.StartsWith(EventPrefix, StringComparison.Ordinal))
         {
             onLog(line);
             return;
         }
+
+        payload = payload[EventPrefix.Length..];
 
         try
         {
