@@ -40,8 +40,18 @@ def test_wpf_log_panel_is_height_limited_and_scrollable():
     log_panel = XAML.split('x:Name="LogPanel"', 1)[1].split('x:Name="LogBox"', 1)[0]
 
     assert 'MaxHeight="188"' in log_panel
+    assert 'Margin="0,24,0,0"' in log_panel
     assert 'VerticalAlignment="Stretch"' in log_box
     assert 'VerticalScrollBarVisibility="Auto"' in log_box
+
+
+def test_wpf_scrolls_to_the_latest_log_after_the_panel_becomes_visible():
+    """折叠期间累计的日志在展开后必须定位到末尾。"""
+    toggle_body = CODE.split("private void LogToggleButton_Click", 1)[1].split("private string _filter", 1)[0]
+
+    assert "ScrollLogToEndAfterLayout();" in toggle_body
+    assert "private void ScrollLogToEndAfterLayout()" in CODE
+    assert "DispatcherPriority.Background" in CODE
 
 
 def test_wpf_default_window_fits_a_1280_by_720_work_area():
@@ -57,11 +67,17 @@ def test_wpf_refreshes_active_filter_after_each_download_event():
 def test_wpf_filter_buttons_share_the_queue_header_row_with_log_toggle():
     queue_header = XAML.split('Text="章节队列"', 1)[1].split('<Grid Grid.Row="1"', 1)[0]
 
-    for name in ("AllFilterButton", "CompletedFilterButton", "WaitingFilterButton"):
+    for name in ("AllFilterButton", "CompletedFilterButton", "WaitingFilterButton", "FailedFilterButton"):
         assert f'x:Name="{name}"' in queue_header
     assert 'Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center"' in queue_header
     assert 'x:Name="LogToggleButton" Grid.Column="2"' in queue_header
     assert 'Margin="0,350,215,0"' not in XAML
+
+
+def test_wpf_can_filter_the_chapter_queue_to_failed_rows():
+    assert 'Content="失败"' in XAML
+    assert 'Click="FailedFilterButton_Click"' in XAML
+    assert 'private void FailedFilterButton_Click(object sender, RoutedEventArgs e) => SetFilter("失败");' in CODE
 
 
 def test_wpf_resets_the_chapter_filter_before_a_new_download_starts():

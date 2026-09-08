@@ -8,6 +8,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Threading;
 using Microsoft.Win32;
 using LinovelibDesktop.Models;
 using LinovelibDesktop.Services;
@@ -184,9 +185,15 @@ public partial class MainWindow : Window
         if (line == _lastLogLine) return;
         _lastLogLine = line;
         LogBox.AppendText(line + Environment.NewLine);
-        LogBox.ScrollToEnd();
+        ScrollLogToEndAfterLayout();
         UpdateTaskOverview();
     }
+
+    private void ScrollLogToEndAfterLayout()
+    {
+        Dispatcher.BeginInvoke(() => LogBox.ScrollToEnd(), DispatcherPriority.Background);
+    }
+
     private void LogToggleButton_Click(object sender, RoutedEventArgs e)
     {
         var opening = LogPanel.Visibility != Visibility.Visible;
@@ -194,6 +201,7 @@ public partial class MainWindow : Window
         {
             LogPanel.Visibility = Visibility.Visible;
             LogToggleButton.Content = "收起日志";
+            ScrollLogToEndAfterLayout();
         }
         else
         {
@@ -207,6 +215,7 @@ public partial class MainWindow : Window
     private void AllFilterButton_Click(object sender, RoutedEventArgs e) => SetFilter("全部");
     private void CompletedFilterButton_Click(object sender, RoutedEventArgs e) => SetFilter("已完成");
     private void WaitingFilterButton_Click(object sender, RoutedEventArgs e) => SetFilter("等待中");
+    private void FailedFilterButton_Click(object sender, RoutedEventArgs e) => SetFilter("失败");
     private void SetFilter(string filter) { _filter = filter; CollectionViewSource.GetDefaultView(_rows).Refresh(); }
 
     private void UpdateTaskOverview()
