@@ -40,6 +40,7 @@ def test_wpf_log_panel_is_height_limited_and_scrollable():
     log_panel = XAML.split('x:Name="LogPanel"', 1)[1].split('x:Name="LogBox"', 1)[0]
 
     assert 'MaxHeight="188"' in log_panel
+    assert 'Margin="0,8,0,0"' in log_panel
     assert 'VerticalAlignment="Stretch"' in log_box
     assert 'VerticalScrollBarVisibility="Auto"' in log_box
 
