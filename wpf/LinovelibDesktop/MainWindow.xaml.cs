@@ -207,6 +207,7 @@ public partial class MainWindow : Window
     private void AllFilterButton_Click(object sender, RoutedEventArgs e) => SetFilter("全部");
     private void CompletedFilterButton_Click(object sender, RoutedEventArgs e) => SetFilter("已完成");
     private void WaitingFilterButton_Click(object sender, RoutedEventArgs e) => SetFilter("等待中");
+    private void FailedFilterButton_Click(object sender, RoutedEventArgs e) => SetFilter("失败");
     private void SetFilter(string filter) { _filter = filter; CollectionViewSource.GetDefaultView(_rows).Refresh(); }
 
     private void UpdateTaskOverview()
