@@ -10,7 +10,7 @@ from linovelib.downloader import download_chapter
 from linovelib.epub_builder import build_epub
 from linovelib.cli import build_parsed_args, choose_volumes
 from linovelib.events import DownloadEvent, emit
-from linovelib.paths import CACHE_DIR, DEFAULT_DOWNLOAD_DIR
+from linovelib.paths import CACHE_DIR, NOVEL_DIR
 from linovelib import __version__
 
 # 中文 Windows 的 stdout/stderr 默认是 GBK：章节标题或内容里一旦出现 GBK 编不了的字符
@@ -339,8 +339,8 @@ def main(argv=None, *, observer=None, cancel_event=None):
     _sweep_temp(CACHE_DIR)  # 清掉被强行中断而残留的 .epub.tmp
     failed = []
     title_safe = _sanitize(novel.title)
-    # 默认输出目录 download/<小说标题>/；--out 时 folder 为 None（不逐卷合成）。
-    folder = None if args.out else (DEFAULT_DOWNLOAD_DIR / title_safe)
+    # 默认输出目录 download/小说/<小说标题>/；--out 时 folder 为 None（不逐卷合成）。
+    folder = None if args.out else (NOVEL_DIR / title_safe)
     if folder is not None:
         folder.mkdir(parents=True, exist_ok=True)
         _sweep_temp(folder)

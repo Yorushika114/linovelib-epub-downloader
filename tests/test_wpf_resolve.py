@@ -62,7 +62,7 @@ def test_wpf_datagrids_scroll_one_row_per_wheel_click():
     cs = (Path(__file__).parents[1] / "wpf" / "LinovelibDesktop" / "MainWindow.xaml.cs"
           ).read_text(encoding="utf-8")
 
-    assert xaml.count('PreviewMouseWheel="DataGrid_SmoothWheel"') == 2
+    assert xaml.count('PreviewMouseWheel="DataGrid_SmoothWheel"') == 4
     assert "private void DataGrid_SmoothWheel" in cs
     assert "sv.LineUp()" in cs and "sv.LineDown()" in cs
 

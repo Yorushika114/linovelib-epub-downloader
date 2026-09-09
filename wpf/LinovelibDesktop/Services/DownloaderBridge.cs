@@ -31,6 +31,25 @@ public sealed class DownloaderBridge
             startInfo.ArgumentList.Add("--out"); startInfo.ArgumentList.Add(request.OutputPath);
         }
 
+        return await RunDownloadAsync(startInfo, onEvent, onLog);
+    }
+
+    /// <summary>按漫画编号/卷号启动 WPF 漫画下载桥接进程（--comic / --vol / --delay / --out）。</summary>
+    public async Task<int> StartComicAsync(ComicDownloadRequest request, Action<DownloadEventDto> onEvent, Action<string> onLog)
+    {
+        var startInfo = CreateBridgeStartInfo();
+        startInfo.ArgumentList.Add("--comic"); startInfo.ArgumentList.Add(request.ComicId);
+        startInfo.ArgumentList.Add("--vol"); startInfo.ArgumentList.Add(request.Volumes);
+        startInfo.ArgumentList.Add("--delay"); startInfo.ArgumentList.Add(request.Delay);
+        if (!string.IsNullOrWhiteSpace(request.OutputPath))
+        {
+            startInfo.ArgumentList.Add("--out"); startInfo.ArgumentList.Add(request.OutputPath);
+        }
+        return await RunDownloadAsync(startInfo, onEvent, onLog);
+    }
+
+    private async Task<int> RunDownloadAsync(ProcessStartInfo startInfo, Action<DownloadEventDto> onEvent, Action<string> onLog)
+    {
         _process = new Process { StartInfo = startInfo };
         if (!_process.Start()) throw new InvalidOperationException("无法启动 Python 下载桥接进程。");
 
@@ -54,9 +73,16 @@ public sealed class DownloaderBridge
 
     /// <summary>仅按书名解析候选列表（不下载），供 WPF 先做书名筛选，再进入卷数/下载。</summary>
     public async Task<List<ResolveResultDto>> ResolveAsync(string text)
+        => await ResolveCoreAsync("--resolve", text);
+
+    /// <summary>仅按书名解析漫画候选列表（不下载）；后续进入编号/卷数/下载。</summary>
+    public async Task<List<ResolveResultDto>> ResolveComicAsync(string text)
+        => await ResolveCoreAsync("--resolve-comic", text);
+
+    private async Task<List<ResolveResultDto>> ResolveCoreAsync(string mode, string text)
     {
         var startInfo = CreateBridgeStartInfo();
-        startInfo.ArgumentList.Add("--resolve");
+        startInfo.ArgumentList.Add(mode);
         startInfo.ArgumentList.Add(text);
 
         using var process = new Process { StartInfo = startInfo };
@@ -84,7 +110,10 @@ public sealed class DownloaderBridge
                 try
                 {
                     var item = JsonSerializer.Deserialize<ResolveResultDto>(line, JsonOptions);
-                    if (item is not null) results.Add(item);
+                    if (item is null) continue;
+                    // 搜索方主动上报错误（如漫画 Cloudflare 限速）：交由界面呈现真实原因。
+                    if (item.Kind == "search_error") throw new InvalidOperationException(item.Message);
+                    results.Add(item);
                 }
                 catch (JsonException) { }
             }
