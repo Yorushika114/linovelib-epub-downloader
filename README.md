@@ -1,6 +1,6 @@
-# linovelib 小说下载 → EPUB
+# linovelib 轻小说 / 漫画下载器
 
-将可访问的小说页面内容、封面和插图整理为 EPUB。可按小说编号或书名定位，并选择一个或多个卷。
+将可访问的小说页面内容、封面和插图整理为 EPUB，并将漫画章节合成为 PDF。可按编号或书名定位，并选择一个或多个卷。
 
 > 仅供个人学习与已获授权的内容处理使用，请尊重作者、译者和发布平台的版权与使用规则。
 
@@ -44,7 +44,7 @@ python -m pip install -r requirements.txt
 2. **卷数**：输入目录显示的卷序号，例如 `4`；多个卷用英文逗号分隔，例如 `1,3,5`；输入 `all` 下载全部卷。
 3. 每个章节完成时会显示进度；本次任务结束后会回到编号/书名输入处，可继续下载另一部小说。输入 `q` 或直接回车退出。
 
-默认生成的 EPUB 位于项目根目录下的 `download/<小说名>/`。若某个目标 EPUB 已存在会自动跳过（重新下载请加 `--force`；`--out` 与 `--merge` 同样适用）。缓存位于 `_tmp_dl/`，两者都不上传到 GitHub。
+默认生成的 EPUB 位于项目根目录下的 `download/小说/<小说名>/`；漫画 PDF 位于 `download/漫画/<漫画名>/`（小说与漫画分类存放）。若某个目标 EPUB 已存在会自动跳过（重新下载请加 `--force`；`--out` 与 `--merge` 同样适用）。缓存位于 `_tmp_dl/`，以上目录均不上传到 GitHub。
 
 ### Windows WPF 图形界面
 
@@ -56,7 +56,9 @@ python -m pip install -r requirements.txt
 
 #### 项目展示
 
-![WPF 下载任务界面示例](docs/images/wpf-ui-example-v1.0.5.png)
+![WPF 漫画下载界面示例](docs/images/wpf-comic-ui-v2.0.0.png)
+
+> 上图：WPF 漫画模式。左侧功能导航可在「小说下载 / 漫画下载」间切换；漫画模式支持按编号直达，或按书名搜索并从候选列表点选，逐卷合成 PDF 到 `download/漫画/`。小说模式界面见 `docs/images/wpf-ui-example-v1.0.5.png`。
 
 ### 常用设置速查
 
@@ -89,6 +91,12 @@ python main.py --novel "败北女角太多了"
 python main.py --novel 3095
 ```
 
+## 漫画模式
+
+漫画同样支持「编号 / 书名」两种定位，并逐卷合成 PDF 到 `download/漫画/<漫画名>/`。桌面 WPF 界面可在左侧「小说下载 / 漫画下载」间切换；命令行入口为 `python launcher.py`，选择漫画后按提示输入编号或书名。
+
+> 漫画模块依赖 Playwright（懒加载，仅在进入漫画路径时启动浏览器），不会影响小说下载链。`bilimanga.net` 走移动端 UA + 首页暖机并对图片做同源解码，详见 `comic/` 包内说明。
+
 ## 参数
 
 | 参数 | 说明 |
@@ -97,7 +105,7 @@ python main.py --novel 3095
 | `--name` | 小说书名（用真实浏览器渲染本站搜索解析编号；无浏览器时回退 Bing / DuckDuckGo 的 `site:` 搜索） |
 | `--volumes` | 选择卷（从 1 开始，逗号分隔，如 `1,3,5`） |
 | `--vol all` | 下载全部卷 |
-| `--out` | 输出 `.epub` 路径；未传入时写入项目根目录的 `download/<书名>/` |
+| `--out` | 输出 `.epub` 路径；未传入时写入项目根目录的 `download/小说/<书名>/` |
 | `--force` | 目标 EPUB 已存在时仍重新下载并覆盖（默认检测到已存在则跳过） |
 | `--delay` | 请求间隔秒，默认 `0.4`，慢速限流设置 |
 | `--no-interactive` | 未指定 `--vol/--volumes` 时不弹交互、下载全部 |
@@ -108,7 +116,8 @@ python main.py --novel 3095
 
 ```text
 轻小说下载爬虫/
-├─ linovelib/             # 解析、下载与 EPUB 构建模块
+├─ linovelib/             # 小说解析、下载与 EPUB 构建模块
+├─ comic/                 # 漫画抓取与 PDF 合成模块（懒加载 Playwright）
 ├─ tests/                 # 离线单元测试与页面夹具
 ├─ docs/                  # 发布设计与实施记录
 ├─ main.py                # 命令行入口
@@ -123,9 +132,10 @@ python main.py --novel 3095
 运行产生的项目自有目录始终相对项目根目录：
 
 - `_tmp_dl/`：页面和图片缓存；
-- `download/`：未传 `--out` 时的默认 EPUB 输出目录。
+- `download/小说/`：未传 `--out` 时的默认小说 EPUB 输出目录；
+- `download/漫画/`：漫画模式的默认 PDF 输出目录。
 
-二者均被 Git 忽略，不会上传。`--out` 是用户明确指定的输出位置，按其传入的相对路径或绝对路径处理。
+三者均被 Git 忽略，不会上传。`--out` 是用户明确指定的输出位置，按其传入的相对路径或绝对路径处理。
 
 ## 输出
 

@@ -123,7 +123,7 @@ def test_main_does_not_publish_pending_rows_for_an_existing_volume(monkeypatch, 
     monkeypatch.setattr(app, "resolve_id", lambda identifier, fetcher, browser=None: "99")
     monkeypatch.setattr(app, "fetch_novel", lambda nid, fetcher: novel)
     monkeypatch.setattr(app, "parse_catalog", lambda html, nid: [volume])
-    monkeypatch.setattr(app, "DEFAULT_DOWNLOAD_DIR", output_root)
+    monkeypatch.setattr(app, "NOVEL_DIR", output_root)
     monkeypatch.setattr(app, "CACHE_DIR", tmp_path / "cache")
 
     result = app.main(["--novel", "99", "--volumes", "1"], observer=events.append)

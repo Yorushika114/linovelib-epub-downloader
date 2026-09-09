@@ -38,6 +38,9 @@ public sealed class ChapterRow : INotifyPropertyChanged
 
 public sealed record DownloadRequest(string NovelId, string Volumes, string Delay, string OutputPath);
 
+/// <summary>漫画下载请求：字段语义与 DownloadRequest 不同（ComicId / --vol / 输出为目录）。</summary>
+public sealed record ComicDownloadRequest(string ComicId, string Volumes, string Delay, string OutputPath);
+
 /// <summary>书名搜索解析返回的单个候选（id + 标题）。</summary>
 public sealed class ResolveResultDto
 {
@@ -45,6 +48,9 @@ public sealed class ResolveResultDto
     public string Id { get; init; } = "";
     public string Title { get; init; } = "";
     public bool Exact { get; init; }
+
+    /// <summary>取回搜索过程的错误原因（如 Cloudflare 限速），无错误时为空。</summary>
+    public string Message { get; init; } = "";
 
     /// <summary>供候选列表『吻合』列显示的文本。</summary>
     public string ExactText => Exact ? "书名吻合" : "";

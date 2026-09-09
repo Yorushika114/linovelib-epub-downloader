@@ -1,5 +1,6 @@
 @echo off
-title linovelib downloader
+chcp 65001 >nul
+title 轻小说/漫画 下载器
 
 where python >nul 2>nul
 if errorlevel 1 (

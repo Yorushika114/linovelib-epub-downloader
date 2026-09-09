@@ -93,8 +93,71 @@ def run_resolve(text: str) -> int:
     return 0
 
 
+def comic_resolve_hits_json(text: str, fetcher=None) -> list[dict]:
+    """把漫画书名解析为候选列表（不选取），返回可 JSON 化的 dict 列表。
+
+    与下载解耦：WPF 在下载前调用它做书名筛选；每条含 kind=search_hit、id、title、exact。
+    id 恒为 str（与 WPF ResolveResultDto.Id 一致）。
+    """
+    from linovelib.resolver import is_exact_match
+    if fetcher is None:
+        from comic.fetcher import ComicFetcher
+        fetcher = ComicFetcher()
+    hits = fetcher.search(text)
+    return [
+        {"kind": "search_hit", "id": str(h.id), "title": h.title,
+         "exact": is_exact_match(text, h.title)}
+        for h in hits
+    ]
+
+
+def run_comic_resolve(text: str) -> int:
+    """仅按书名解析漫画候选（不下载），把每条候选以一行 JSON 打到 stdout 供 WPF 选择。"""
+    fetcher = None
+    try:
+        from comic.fetcher import ComicFetcher
+        fetcher = ComicFetcher()
+        with contextlib.redirect_stdout(sys.stderr):
+            items = comic_resolve_hits_json(text, fetcher=fetcher)
+    except Exception as exc:
+        # 与小说 run_resolve 一致：解析通路读的是无前缀 JSON，故错误也输出为裸 JSON 一行。
+        print(json.dumps({"kind": "search_error", "message": str(exc)}, ensure_ascii=False),
+              file=sys.__stdout__, flush=True)
+        return 1
+    finally:
+        if fetcher is not None:
+            try:
+                fetcher.close()
+            except Exception:
+                pass
+    for item in items:
+        print(json.dumps(item, ensure_ascii=False), file=sys.__stdout__, flush=True)
+    print(json.dumps({"kind": "search_done", "total": len(items)},
+                     ensure_ascii=False), file=sys.__stdout__, flush=True)
+    return 0
+
+
+def run_comic(argv: list[str] | None = None) -> int:
+    """驱动漫画下载（comic.cli.main），输出桥事件并可响应安全取消。"""
+    cancel_event = threading.Event()
+    threading.Thread(
+        target=read_cancel_commands, args=(sys.stdin, cancel_event), daemon=True
+    ).start()
+    try:
+        with contextlib.redirect_stdout(sys.stderr):
+            from comic.cli import main as comic_main
+            return comic_main(argv, observer=emit_json_event, cancel_event=cancel_event)
+    except Exception as exc:
+        emit_json_event(DownloadEvent("worker_failed", message=str(exc)))
+        return 1
+
+
 if __name__ == "__main__":
     argv = sys.argv[1:]
     if argv and argv[0] == "--resolve":
         raise SystemExit(run_resolve(argv[1]))
+    if argv and argv[0] == "--resolve-comic":
+        raise SystemExit(run_comic_resolve(argv[1]))
+    if argv and argv[0] == "--comic":
+        raise SystemExit(run_comic(argv))
     raise SystemExit(run())

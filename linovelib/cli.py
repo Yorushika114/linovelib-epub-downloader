@@ -21,7 +21,7 @@ def build_parsed_args(argv):
                                      "如 1,3,5 或 1-3,5 或 1-3,6-8）")
     p.add_argument("--vol", dest="volumes_short", choices=["all"], help="下载全部卷")
     p.add_argument("--out", help="输出 epub 路径。默认每下一卷就合成该卷到 "
-                                 "download/<小说标题>/；多卷可选再合并整本")
+                                 "download/小说/<小说标题>/；多卷可选再合并整本")
     p.add_argument("--delay", type=float, default=0.4, help="请求间隔秒（默认 0.4）")
     p.add_argument("--no-interactive", action="store_true",
                    help="未指定 --vol/--volumes 时，不弹交互并默认下载全部卷")
