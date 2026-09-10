@@ -14,6 +14,12 @@ download/
 artifacts/
 .worktrees/
 docs/local/
+
+# 免安装分发包产物（体积巨大，不入库）
+# runtime/ 为内置嵌入式 Python 运行时；publish/ 与 dist/ 为构建输出。
+runtime/
+dist/
+**/publish/
 # 本地 bug 日志（仅保存在本地，不入库）
 docs/BUG_LOG.md
 
