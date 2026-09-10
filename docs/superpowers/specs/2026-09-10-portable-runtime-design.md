@@ -70,10 +70,17 @@ Python、无需安装 .NET SDK 或 Runtime、无需联网装依赖。
 │       ├─ python310.zip               ← 标准库
 │       ├─ python310._pth              ← 路径配置（见 §6）
 │       └─ Lib/site-packages/          ← 依赖
-├─ linovelib/  comic/  main.py  wpf_bridge.py
+├─ linovelib/  comic/  main.py  wpf_bridge.py  launcher.py
+├─ download.bat                        ← 构建脚本生成（见下）
 ├─ wpf/LinovelibDesktop/               ← 源码保留（可读可改）
 └─ download/  _tmp_dl/                 ← 数据目录，与源码版完全相同
 ```
+
+一处**有意的文件级差异**：分发版的 `download.bat` 由构建脚本重新生成，指向
+`%~dp0runtime\python\python.exe`（回退 `python`），而非直接拷贝仓库根的同名文件——
+后者调用裸 `python`，拷到无 Python 的机器上必然失败。这是「零分叉」约束下唯一的
+例外，且只涉及**启动入口的措辞**，不涉及数据目录、桥接协议或路径推导。WPF 入口
+（`轻小说下载器.exe`）不走 bat，故不受影响。
 
 体积构成：嵌入式 Python 运行时 174MB（其中 playwright 自带 Node 驱动 107MB）
 + WPF 自包含 162MB ≈ **336MB**。
@@ -163,7 +170,13 @@ public static string FindPython(string root)
 5. 拷贝源码（`linovelib/`、`comic/`、`main.py`、`wpf_bridge.py`、`README.md`）
 6. 输出体积报告
 
-脚本须**幂等**：可重复执行，已存在的 `runtime/` 可复用或按 `--force` 重建。
+脚本须**幂等**：可重复执行，已存在的 `runtime/` 可复用或按 `--force` 重建（脚本内为
+`-Force` 开关）。
+
+**脚本必须以 UTF-8 with BOM 保存**。Windows PowerShell 5.1 对无 BOM 的 `.ps1` 按系统
+ANSI 代码页解码，脚本内的中文注释与提示会乱码，进而报出一连串 `Unexpected token` /
+`Missing closing '}'` 语法错误，脚本根本无法启动（首次执行即踩此坑）。
+`tests/test_bundled_runtime.py::test_build_script_has_utf8_bom` 锁定该约定。
 
 ## 8. 版本一致性
 

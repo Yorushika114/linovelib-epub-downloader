@@ -150,6 +150,39 @@ python main.py --novel 3095
 - 请遵守目标网站的使用规则与版权要求，并设置合理请求间隔。
 - 网站页面或保护策略变化时，生成结果应先自行核验；本项目不保证第三方网站内容的完整性或顺序正确性。
 
+## 免安装分发包
+
+如果不想在目标机器上装 Python 和 .NET，可以用构建脚本产出**开箱即用**的分发包：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools/build_dist.ps1
+```
+
+产物在 `dist/`，整个文件夹拷到任意 Windows 10/11 机器上双击「轻小说下载器.exe」即可，
+目标机器**无需安装 Python、.NET SDK 或 Runtime，也无需联网装依赖**。命令行用法为
+`dist\download.bat`。
+
+分发包构成（约 336MB）：
+
+| 部分 | 体积 | 说明 |
+|---|---|---|
+| `runtime/python/` | ~174MB | python.org 嵌入式 Python 3.10.11，含全部依赖 |
+| 自包含 WPF 发布 | ~162MB | 含 .NET 运行时，故目标机器无需装 .NET |
+
+几点设计说明：
+
+- **不打包 playwright 浏览器**：正文抓取走系统 Edge（`channel="msedge"`），
+  省下约 1.4GB。目标机器需有 Windows 自带的 Edge。
+- **不使用 venv**：venv 的 `pyvenv.cfg` 硬编码基础解释器路径，且 `Lib/` 不含标准库，
+  无法跨机器搬运。嵌入式包自带标准库，可整体拷贝。
+- **与源码版零分叉**：数据目录、桥接协议、路径推导完全相同——分发版同样把结果写到
+  其所在目录下的 `download/小说/`、`download/漫画/`。这是刻意的约束：项目早期曾因
+  便携版使用独立数据目录导致行为不一致而移除该方案。
+- 构建脚本幂等，可重复执行；`runtime/` 会复用，加 `-Force` 可强制重建。
+
+脚本须以 UTF-8 with BOM 保存（Windows PowerShell 5.1 对无 BOM 的 `.ps1` 按 ANSI
+解码，中文会乱码并导致语法错误），`tests/test_bundled_runtime.py` 已锁定该约定。
+
 ## 开发与验证
 
 ```bash
