@@ -80,6 +80,34 @@ public sealed class DownloaderBridge
         => await ResolveCoreAsync("--resolve-comic", text);
 
     private async Task<List<ResolveResultDto>> ResolveCoreAsync(string mode, string text)
+        => await RunJsonLinesAsync(mode, text, "search_hit");
+
+    /// <summary>只取小说卷列表（不下载），供 WPF 在下载前渲染卷选择表。</summary>
+    public async Task<List<VolumeRow>> CatalogAsync(string nid)
+        => await CatalogCoreAsync("--catalog", nid);
+
+    /// <summary>只取漫画卷列表（不下载）。漫画目录需 Playwright，比小说侧慢得多。</summary>
+    public async Task<List<VolumeRow>> CatalogComicAsync(string cid)
+        => await CatalogCoreAsync("--comic-catalog", cid);
+
+    private async Task<List<VolumeRow>> CatalogCoreAsync(string mode, string id)
+    {
+        var items = await RunJsonLinesAsync(mode, id, "volume", errorKinds: new[] { "catalog_error" });
+        return items
+            .Select(r => new VolumeRow { Index = r.Index, Title = r.Title, ChapterCount = r.Chapters })
+            .ToList();
+    }
+
+    /// <summary>
+    /// 跑一次「读裸 JSON 行」的桥接子进程（搜索 / 取目录），只保留 <paramref name="keepKind"/> 的行。
+    /// </summary>
+    /// <remarks>
+    /// 搜索与取目录共用这一份实现，是为了让超时语义只有一处：上一轮刚修好「超时被当成
+    /// 未找到」的误报，若取目录另写一份「读完已收集的行就返回」的循环，同样的误报会
+    /// 以「这部作品 0 卷」的形式复发。
+    /// </remarks>
+    private async Task<List<ResolveResultDto>> RunJsonLinesAsync(
+        string mode, string text, string keepKind, string[]? errorKinds = null)
     {
         var startInfo = CreateBridgeStartInfo();
         startInfo.ArgumentList.Add(mode);
@@ -119,8 +147,12 @@ public sealed class DownloaderBridge
                 {
                     var item = JsonSerializer.Deserialize<ResolveResultDto>(line, JsonOptions);
                     if (item is null) continue;
-                    // 搜索方主动上报错误（如漫画 Cloudflare 限速）：交由界面呈现真实原因。
-                    if (item.Kind == "search_error") throw new InvalidOperationException(item.Message);
+                    // 搜索/取目录方主动上报错误（如漫画 Cloudflare 限速、目录页被封）：
+                    // 交由界面呈现真实原因，不要静默降级成「没有结果」。
+                    if (item.Kind == "search_error" || errorKinds?.Contains(item.Kind) == true)
+                    {
+                        throw new InvalidOperationException(item.Message);
+                    }
                     results.Add(item);
                 }
                 catch (JsonException) { }
@@ -135,7 +167,7 @@ public sealed class DownloaderBridge
             TryKill(process);
             throw;
         }
-        return results.Where(r => r.Kind == "search_hit").ToList();
+        return results.Where(r => r.Kind == keepKind).ToList();
     }
 
     /// <summary>把还活着的解析进程连子进程一起杀掉（Playwright/Edge 等子进程一并结束）。</summary>
