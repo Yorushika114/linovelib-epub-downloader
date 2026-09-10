@@ -17,9 +17,12 @@
 from __future__ import annotations
 
 import base64
+import re
 import sys
 import time
+from urllib.parse import urljoin
 
+from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
 
 from .models import Comic, ComicHit, Chapter
@@ -347,7 +350,15 @@ class ComicFetcher:
                 page.keyboard.press("Enter")
                 # 结果窗口：真搜索 1~3s 内就渲染出「條記錄」模块；把它从 self.timeout(90s)
                 # 缩到 15s——模块始终没渲染即判为限速/挑战，快速重建会话重试，而非干等 90s。
-                count = self._wait_search_results(page)
+                redirect: list = []
+                count = self._wait_search_results(page, redirect=redirect)
+                if count == -1 and redirect:
+                    # 唯一命中被 302 直达详情页：合成一条候选，语义等同「搜到 1 条」。
+                    cid, title, author = redirect[0]
+                    hits = [ComicHit(id=cid, title=title, author=author,
+                                     url=urljoin(BASE, f"/detail/{cid}.html"))]
+                    self._search_cache[keyword] = hits
+                    return hits
                 if count is None:   # 被限速：模块一直没渲染出来
                     self._reset_session()
                     time.sleep(2 + attempt * 4)
@@ -364,13 +375,64 @@ class ComicFetcher:
             "Cloudflare Attention Required：搜索页连多个会话仍没渲染出结果——自动化指纹被判定，"
             "或站点对连续搜索暂时限速。可稍后重试，或直接用漫画编号。") from last_exc
 
-    def _wait_search_results(self, page) -> int | None:
+    @staticmethod
+    def _redirect_hit(final_url: str, html: str):
+        """搜索被 302 送到漫画详情页时，返回 (编号, 标题, 作者)；否则 None。
+
+        与小说站一致：查询词能唯一定位一部漫画时，/search.html 不渲染「條記錄」结果
+        列表，而是直接跳 /detail/{id}.html。此时 `_result_state` 得到 [0, False]，
+        `_wait_search_results` 会因 saw_module=False 返回 None，被误判为「搜索页根本
+        没渲染（限速/挑战）」——于是重建会话重试三轮，最后把一次**成功命中**报成
+        Cloudflare 拦截。
+
+        只有落点形如 /detail/{id}.html 才算「精确命中直达」；停在 /search.html 的
+        结果页（含 0 条）一律返回 None，交由常规结果列表解析处理，避免把「查无此书」
+        误判成命中。
+
+        标题取页面 h1（= 漫画名）。**不能取 <title> 首段**：站点格式是
+        「{书名}漫畫_{副标题}漫畫_{作者}_嗶哩漫畫」，按 "_" 切首段会留下「漫畫」后缀，
+        导致上层 is_exact_match 把精确命中判成不吻合。h1 缺失时才退回 <title> 并剥后缀。
+
+        作者取详情页作者的 DOM 位置（h4.book-title 的容器）。注意详情页的 h2 是**副标题**
+        而非作者（目录页 h2 才是作者），故此处不复用 parse_catalog 的 h2 取法。
+        """
+        m = re.search(r"/detail/(\d+)\.html", final_url or "")
+        if not m:
+            return None
+        cid = int(m.group(1))
+
+        soup = BeautifulSoup(html or "", "lxml")
+        h1 = soup.select_one("h1")
+        title = h1.get_text(" ", strip=True) if h1 else ""
+        if not title:
+            # 退回 <title>：站点拼成「{书名}漫畫_..._嗶哩漫畫」，剥掉后缀与尾巴。
+            t = re.search(r"<title[^>]*>(.*?)</title>", html or "", re.S | re.I)
+            raw = t.group(1) if t else ""
+            raw = re.sub(r"<[^>]+>", "", raw)
+            head = raw.split("_", 1)[0].strip()
+            if head.endswith("漫畫"):
+                head = head[: -len("漫畫")]
+            title = head.strip()
+
+        author = ""
+        el = soup.select_one("h4.book-title")
+        if el:
+            # 作者节点里可能带 SVG 图标，其 <title> 会被 get_text 混进来，先剔除。
+            for svg in el.select("svg"):
+                svg.extract()
+            author = el.get_text(" ", strip=True)
+        return cid, title, author
+
+    def _wait_search_results(self, page, redirect: list | None = None) -> int | None:
         """提交搜索后等待「條記錄」结果模块渲染，返回命中条数（0 = 真的没有结果）。
 
         真搜索通常 1~3 秒即渲染；把窗口从 self.timeout(90s) 缩到 _search_render_window(15s)，
         避免复用热会话连搜第二本时被 Cloudflare 限速、静默干等整分钟。若窗口内模块始终
         没渲染（说明被限速/挑战卡住），返回 None 供调用方重建会话重试。
         返回 0 = 模块渲染了但 0 条（真无结果，不再重试）。
+
+        redirect：可选出参。若等待期间检测到页面被 302 送到详情页（唯一命中），把
+        合成的 (编号, 标题, 作者) 放进该列表并立即返回 -1，避免把成功命中误判成限速。
         """
         start = time.time()
         deadline = start + self._search_render_window
@@ -378,6 +440,18 @@ class ComicFetcher:
         last_shown = -1.0
         saw_module = False
         while time.time() < deadline:
+            # 唯一命中直达详情页：此时永远等不到「條記錄」模块，必须在轮询里先识别出来，
+            # 否则会被下面 saw_module 的判定当成限速，白重建三轮会话（见 _redirect_hit）。
+            try:
+                if "/detail/" in (page.url or ""):
+                    hit = self._redirect_hit(page.url, page.content())
+                    if hit is not None:
+                        if redirect is not None:
+                            redirect.append(hit)
+                        self._status_line("", clear=True)
+                        return -1
+            except Exception:
+                pass
             # 提交表单会触发导航；导航期间 evaluate 抛「context destroyed」属正常竞态，
             # 吞掉它、继续以 400ms 轮询，直到结果「條記錄」模块渲染出来。
             try:

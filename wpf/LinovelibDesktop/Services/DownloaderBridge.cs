@@ -103,7 +103,15 @@ public sealed class DownloaderBridge
                 if (finished == deadline)
                 {
                     TryKill(process);
-                    return results.Where(r => r.Kind == "search_hit").ToList();
+                    // 超时**不能**当成「没搜到」返回空列表：调用方会把空列表渲染成
+                    // 「未找到名为『X』的小说，请改用编号」，用户于是得到一本并不存在的
+                    // 结论，也不知道该重试。冷机器上这条路径其实是常态——首次启动 Edge
+                    // 要建 profile、首次访问站点无任何缓存/cookie，暖机 + 搜索 + 2.5s
+                    // 静置很容易越过 60s；而开发机 Edge 已暖、cookie 已在，秒回，故这个
+                    // 误报只在目标机器上出现。抛出明确异常，让界面如实提示「超时，请重试」。
+                    throw new TimeoutException(
+                        $"搜索超时（{ResolveTimeoutSeconds} 秒）。首次使用或网络较慢时，" +
+                        "浏览器需要更长时间启动，请稍后重试；仍不行可改用编号。");
                 }
                 var line = await readLine;
                 if (line is null) break; // stdout EOF

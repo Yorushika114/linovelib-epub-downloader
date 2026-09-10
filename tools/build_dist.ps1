@@ -188,6 +188,22 @@ foreach ($pyc in @("$OutDir\__pycache__", "$VerifyDst\__pycache__")) {
 # 内置运行时，找不到才回退 PATH 上的 python。
 # 编码同仓库根的同名文件：UTF-8（无 BOM）。首行 chcp 65001 先生效，cmd 逐行读取
 # 后续内容时才不会把中文 title 解成乱码；写成 ASCII 反而会让标题变成 ???。
+# 报告用的「分发包体积」必须排除 download/ 与 _tmp_dl/：它们是 $KeepNames 刻意保留的
+# 用户数据（见上文，误删等于毁数据），会把用户已下载的成品算进来。开发机常直接在 dist
+# 内运行，这两个目录会累积到 GB 级——若不排除，「分发包总计」将取决于开发机有没有跑过
+# 应用，恰好与「分发包应该多大」相反。故单列，并从总计里扣掉。
+function Get-DistPayloadMB($outDir, $excludeNames) {
+    $bytes = (Get-ChildItem $outDir -Recurse -File -Force -ErrorAction SilentlyContinue |
+              Where-Object {
+                  $rel = $_.FullName.Substring($outDir.Length).TrimStart('\')
+                  $top = $rel.Split('\')[0]
+                  $excludeNames -notcontains $top
+              } |
+              Measure-Object -Property Length -Sum).Sum
+    if (-not $bytes) { return 0 }
+    return [math]::Round($bytes / 1MB, 1)
+}
+
 Write-Step "生成命令行入口 download.bat"
 $DistBat = @'
 @echo off
@@ -207,14 +223,20 @@ pause
     [System.Text.UTF8Encoding]::new($false))
 
 # WPF 源码保留在分发包内（设计 §4）：分发版跑的是已编译的 exe，源码仅作可读可改
-# 的参考。排除 bin/obj，避免把开发机的中间产物带进去。
+# 的参考。排除 MSBuild 中间产物，避免把开发机的构建状态带进去。
+#
+# 过滤必须覆盖 artifacts/：MSBuild 的中间目录名可以是自定义的（如
+# wpf-release-verify-obj），按「目录段恰好叫 bin/obj」去匹配会漏掉它们。实测
+# artifacts/wpf-release-verify-obj/.../*.FileListAbsolute.txt 被原样拷进了分发版，
+# 而该文件记录的正是上一次构建的产物**绝对路径**——等于随包泄漏开发机路径。
+# 这与 .gitignore 对 artifacts/ 的处理保持一致。
 $WpfSrc = Join-Path $Root 'wpf\LinovelibDesktop'
 $WpfDst = Join-Path $OutDir 'wpf\LinovelibDesktop'
 if (Test-Path $WpfSrc) {
     if (Test-Path $WpfDst) { Remove-Item -Recurse -Force $WpfDst }
     New-Item -ItemType Directory -Force -Path $WpfDst | Out-Null
     Get-ChildItem $WpfSrc -Recurse -File |
-        Where-Object { $_.FullName -notmatch '\\(bin|obj)\\' } |
+        Where-Object { $_.FullName -notmatch '\\(bin|obj|artifacts)\\' } |
         ForEach-Object {
             $rel = $_.FullName.Substring($WpfSrc.Length).TrimStart('\')
             $target = Join-Path $WpfDst $rel
@@ -253,6 +275,15 @@ Write-Host ""
 Write-Host "构建完成" -ForegroundColor Green
 Write-Host ("  {0,-22} {1,8} MB" -f 'WPF 自包含发布', $WpfSizeMB)
 Write-Host ("  {0,-22} {1,8} MB" -f '嵌入式 Python 运行时', (Get-DirSizeMB $RuntimeDir))
-Write-Host ("  {0,-22} {1,8} MB" -f '分发包总计', (Get-DirSizeMB $OutDir))
+$UserData = @('download', '_tmp_dl')
+$PayloadMB = Get-DistPayloadMB $OutDir $UserData
+Write-Host ("  {0,-22} {1,8} MB" -f '分发包总计', $PayloadMB)
+# 单列用户数据：它们就在分发目录里，但不算「包」的一部分（见 Get-DistPayloadMB 注释）。
+foreach ($name in $UserData) {
+    $p = Join-Path $OutDir $name
+    if (Test-Path $p) {
+        Write-Host ("  {0,-22} {1,8} MB  （用户数据，不计入）" -f "$name/", (Get-DirSizeMB $p))
+    }
+}
 Write-Host ""
 Write-Host "下一步：把整个 $OutDir 目录拷贝到目标机器，双击「轻小说下载器.exe」。"

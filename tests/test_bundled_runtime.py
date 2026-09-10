@@ -178,6 +178,67 @@ def test_build_strips_root_pycache():
     )
 
 
+def test_verify_dist_launches_bridge_in_subprocess():
+    """「._pth 漏写 ..\\..」必须由**子进程**检查，不能靠本进程 import。
+
+    本脚本的 _bootstrap_path() 会把分发版根目录塞进 sys.path，于是本进程内
+    `import main` 无论 ._pth 写成什么都成功——测的是「源码在不在」，不是「应用能不能起
+    来」。实测：剥掉 ._pth 的 `..\\..` 后，真实启动 wpf_bridge.py 以
+    ModuleNotFoundError 退出 1，而旧版自检仍报 15/15 全绿（出厂闸门对最致命的配置
+    错误完全失明）。子进程不继承父进程对 sys.path 的修改，路径模型才与真实运行时一致。
+    """
+    script = (ROOT / "tools" / "verify_dist.py").read_text(encoding="utf-8")
+    assert "subprocess" in script, (
+        "自检未用子进程验证应用启动——._pth 类故障在本进程里永远测不出来。"
+    )
+    assert "wpf_bridge.py" in script, (
+        "自检未按 WPF 的真实调用方式启动桥接。"
+    )
+    # 必须断言退出码，而不是只看能否 import。
+    assert "returncode" in script
+
+
+def test_verify_dist_checks_no_build_intermediates():
+    """分发版里不得残留 artifacts/ 等构建中间产物。
+
+    MSBuild 中间目录名可以是自定义的（wpf-release-verify-obj），按「目录段恰好叫
+    bin/obj」过滤会漏，其 FileListAbsolute.txt 记录的正是开发机绝对路径。实测该目录
+    曾被拷进分发版。
+    """
+    script = (ROOT / "tools" / "verify_dist.py").read_text(encoding="utf-8")
+    assert "artifacts" in script, "自检未检查 artifacts/ 类构建中间产物。"
+    assert "check_no_build_intermediates" in script
+
+
+def test_build_excludes_custom_msbuild_intermediate_dirs():
+    """构建脚本的 WPF 源码过滤器必须排除 artifacts/。
+
+    原先只匹配 `\\(bin|obj)\\'，而 artifacts/wpf-release-verify-obj/ 里的目录段不叫
+    bin 也不叫 obj，故未被过滤——实测它连同 FileListAbsolute.txt 一起进了分发版。
+    """
+    source = (ROOT / "tools" / "build_dist.ps1").read_text(encoding="utf-8")
+    assert "artifacts" in source, "构建脚本未排除 artifacts/ 中间产物目录。"
+    filt = [ln for ln in source.splitlines() if "notmatch" in ln and "bin" in ln]
+    assert filt, "未找到 WPF 源码过滤器。"
+    assert any("artifacts" in ln for ln in filt), (
+        f"过滤器未包含 artifacts/：{filt}"
+    )
+
+
+def test_dist_size_report_excludes_user_data():
+    """「分发包总计」必须排除 download/ 与 _tmp_dl/。
+
+    这两个目录被 $KeepNames 刻意保留（可能含用户已下载的成品，误删等于毁数据），但
+    它们是**用户数据**不是「包」。开发机常直接在 dist 内运行，它们会累积到 GB 级，
+    不排除的话「分发包体积」将取决于开发机跑没跑过应用。
+    """
+    source = (ROOT / "tools" / "build_dist.ps1").read_text(encoding="utf-8")
+    assert "Get-DistPayloadMB" in source, (
+        "构建脚本未单独计算分发包体积——用户数据会被算进去。"
+    )
+    assert "$UserData" in source and "不计入" in source
+
+
 def test_verify_dist_flags_missing_runtime():
     """自检必须能识别「这里不是分发版」。
 
