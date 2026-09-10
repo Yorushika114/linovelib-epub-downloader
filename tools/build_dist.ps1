@@ -67,11 +67,11 @@ Write-Host "  Python 版本: $PyVersion"
 # ---------------------------------------------------------------- 1. 前置检查
 $DistExe = Join-Path $OutDir '轻小说下载器.exe'
 $RuntimeDir = Join-Path $OutDir 'runtime\python'
+# WPF 先发布到暂存目录再整体搬入：这样 dist 里的陈旧文件会被彻底清掉（只删顶层
+# 文件会留下上次的 runtime/ 等目录），且发布产物的体积可以单独量准。
+$StageDir = Join-Path $OutDir '.publish_stage'
 
-if (Test-Path $DistExe) {
-    Write-Step "清理旧的发布产物"
-    Get-ChildItem $OutDir -File | Remove-Item -Force -ErrorAction SilentlyContinue
-}
+if (Test-Path $StageDir) { Remove-Item -Recurse -Force $StageDir }
 
 # ------------------------------------------------------- 2. WPF 自包含发布
 Write-Step "发布 WPF（自包含，目标机器无需 .NET）"
@@ -80,16 +80,28 @@ dotnet publish $Proj `
     -c Release `
     -r win-x64 `
     --self-contained true `
-    -o $OutDir `
+    -o $StageDir `
     --nologo `
     --verbosity:quiet
 if ($LASTEXITCODE -ne 0) { throw "dotnet publish 失败（退出码 $LASTEXITCODE）" }
 
 # 发布产物中的 LinovelibDesktop.exe 即分发版入口，改名为「轻小说下载器.exe」。
-$PublishedExe = Join-Path $OutDir 'LinovelibDesktop.exe'
+$PublishedExe = Join-Path $StageDir 'LinovelibDesktop.exe'
 if (-not (Test-Path $PublishedExe)) { throw "未找到发布产物 $PublishedExe" }
-Move-Item -Force $PublishedExe $DistExe
-Write-Host "    入口: $(Split-Path -Leaf $DistExe)"
+Move-Item -Force $PublishedExe (Join-Path $StageDir '轻小说下载器.exe')
+
+# 量准 WPF 发布产物的体积（此时暂存目录里只有它）。
+$WpfSizeMB = Get-DirSizeMB $StageDir
+
+# 清掉 dist 里的旧发布产物，为搬运新产物腾位置。
+# 必须保留 runtime/（重建代价高，留着可复用）与 download/、_tmp_dl/（可能已有用户
+# 下载的成品，误删等于毁数据），以及刚发布好的暂存目录本身。
+$KeepNames = @('runtime', 'download', '_tmp_dl', '.publish_stage')
+Get-ChildItem $OutDir -Force | Where-Object { $KeepNames -notcontains $_.Name } |
+    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+Get-ChildItem $StageDir -Force | Move-Item -Destination $OutDir -Force
+Remove-Item -Recurse -Force $StageDir -ErrorAction SilentlyContinue
+Write-Host "    入口: 轻小说下载器.exe"
 
 # ------------------------------------------------- 3. 嵌入式 Python 运行时
 if ((Test-Path $RuntimeDir) -and -not $Force) {
@@ -106,15 +118,19 @@ if ((Test-Path $RuntimeDir) -and -not $Force) {
     Expand-Archive -Path $ZipPath -DestinationPath $RuntimeDir -Force
     Remove-Item $ZipPath -Force -ErrorAction SilentlyContinue
 
-    # embeddable 默认不启用 site，pip 与 site-packages 都不可用。
-    # 必须改写 ._pth：显式列出 site-packages 并启用 import site。
-    Write-Step "配置 python310._pth（启用 site + site-packages）"
+    # embeddable 默认不启用 site，pip 与 site-packages 都不可用；且 ._pth 一旦存在，
+    # Python 就**不再**自动把脚本所在目录加进 sys.path。后者是致命的：WPF 以
+    # `python <root>\wpf_bridge.py` 启动桥接，而 wpf_bridge.py 要 `import main`，
+    # 缺了项目根就会 ModuleNotFoundError: No module named 'main'。
+    # 故必须显式加上项目根 `..\..`（相对 runtime\python\ 即分发包根）。
+    Write-Step "配置 python310._pth（启用 site + site-packages + 项目根）"
     $Pth = Join-Path $RuntimeDir 'python310._pth'
     if (-not (Test-Path $Pth)) { throw "未找到 $Pth（Python 版本与文件名不匹配？）" }
     @(
         'python310.zip',
         '.',
         'Lib\site-packages',
+        '..\..',
         '',
         'import site'
     ) | Set-Content -Path $Pth -Encoding ASCII
@@ -154,10 +170,18 @@ foreach ($f in @('main.py', 'wpf_bridge.py', 'launcher.py', 'requirements.txt', 
     if (Test-Path $src) { Copy-Item -Force $src $OutDir }
 }
 
+# 自检脚本随包发布，用户可在目标机器上自行复验（设计 §10 的验收项）。
+# 必须放进分发版内：脚本按 __file__ 向上定位根目录，从仓库里跑会去校验仓库而不是
+# 分发版——那样「检查通过」是假象（实测踩过：PROJECT_ROOT 打出了仓库路径）。
+$VerifyDst = Join-Path $OutDir 'tools'
+New-Item -ItemType Directory -Force -Path $VerifyDst | Out-Null
+Copy-Item -Force (Join-Path $Root 'tools\verify_dist.py') $VerifyDst
+
 # 命令行入口：源码仓库的 download.bat 直接调用裸 `python`，拷进分发版会在无
 # Python 的机器上失败——那正是本次要解决的问题。故分发版另生成一份 bat，优先用
 # 内置运行时，找不到才回退 PATH 上的 python。
-# 注意：bat 内容全是 ASCII，避免代码页问题；chcp 65001 仅为正确显示 Python 输出。
+# 编码同仓库根的同名文件：UTF-8（无 BOM）。首行 chcp 65001 先生效，cmd 逐行读取
+# 后续内容时才不会把中文 title 解成乱码；写成 ASCII 反而会让标题变成 ???。
 Write-Step "生成命令行入口 download.bat"
 $DistBat = @'
 @echo off
@@ -170,7 +194,11 @@ if not exist "%PY%" set "PY=python"
 "%PY%" "%~dp0launcher.py"
 pause
 '@
-Set-Content -Path (Join-Path $OutDir 'download.bat') -Value $DistBat -Encoding ASCII
+# 用 .NET API 写以精确控制编码——Set-Content -Encoding UTF8 会带 BOM。
+[System.IO.File]::WriteAllText(
+    (Join-Path $OutDir 'download.bat'),
+    ($DistBat -replace "`r?`n", "`r`n"),
+    [System.Text.UTF8Encoding]::new($false))
 
 # WPF 源码保留在分发包内（设计 §4）：分发版跑的是已编译的 exe，源码仅作可读可改
 # 的参考。排除 bin/obj，避免把开发机的中间产物带进去。
@@ -190,16 +218,27 @@ if (Test-Path $WpfSrc) {
 }
 
 # --------------------------------------------------------------- 6. 验证
+# 这一步是本次的核心保障：仅验证「依赖能导入」是不够的（那样跑得过，但应用一启动
+# 就 No module named 'main'）。必须按应用的**真实调用方式**跑一遍——WPF 是用
+# `python <root>\wpf_bridge.py` 启动桥接的，而脚本目录能否进 sys.path 取决于 ._pth
+# 的配置。故这里实际调用一次桥接的 --help。
 Write-Step "验证嵌入式运行时可用"
 & $PyExe -c "import bs4, lxml, PIL, ebooklib, requests, playwright; print('    依赖导入 OK')"
 if ($LASTEXITCODE -ne 0) { throw "运行时依赖导入失败" }
 
 & $PyExe -c "import sys; print('    Python:', sys.version.split()[0])"
 
+# 出厂闸门：跑 tools/verify_dist.py。检查逻辑放在 Python 里而非此处内联，因为
+# PowerShell 5.1 会把子进程的 stderr 包成终止性 ErrorRecord（argparse 的 --help 正
+# 走 stderr），且子进程输出是 GBK 而非 UTF-8——内联比对中文必然误判。详见该脚本头注释。
+Write-Step "端到端自检：按应用真实方式验证"
+& $PyExe (Join-Path $OutDir 'tools\verify_dist.py')
+if ($LASTEXITCODE -ne 0) { throw "分发版自检未通过（详见上方输出）" }
+
 # --------------------------------------------------------------- 7. 报告
 Write-Host ""
 Write-Host "构建完成" -ForegroundColor Green
-Write-Host ("  {0,-22} {1,8} MB" -f 'WPF 自包含发布', (Get-DirSizeMB ($OutDir + '\*')))
+Write-Host ("  {0,-22} {1,8} MB" -f 'WPF 自包含发布', $WpfSizeMB)
 Write-Host ("  {0,-22} {1,8} MB" -f '嵌入式 Python 运行时', (Get-DirSizeMB $RuntimeDir))
 Write-Host ("  {0,-22} {1,8} MB" -f '分发包总计', (Get-DirSizeMB $OutDir))
 Write-Host ""

@@ -122,13 +122,29 @@ python.org 的 embeddable 包默认**不启用 site**，故 pip 与 `site-packag
 python310.zip
 .
 Lib\site-packages
+..\..
 
 import site
 ```
 
 - `python310.zip`：标准库
 - `Lib\site-packages`：第三方依赖（必须显式列出，embeddable 不自动扫描）
+- `..\..`：**项目根，不可省略**（理由见下）
 - 末行 `import site`：启用 site 机制（默认被注释掉）
+
+**为什么必须有 `..\..`（实测踩坑）**：`._pth` 一旦存在，Python 就**不再**自动把
+脚本所在目录加入 `sys.path`——这是 embeddable 的既定行为。而 WPF 是以
+`python <root>\wpf_bridge.py` 启动桥接的（`DownloaderBridge.CreateBridgeStartInfo`，
+`WorkingDirectory = root`），`wpf_bridge.py` 第 12 行 `import main as downloader_main`。
+少了这一行，`import main` 直接 `ModuleNotFoundError`，整个应用起不来。
+
+危险之处在于它**骗过了最初的验收**：只测「依赖能否导入」（`import bs4, lxml, PIL...`）
+是通过的，因为那些包都在 `site-packages` 里；而从 `dist/` 目录跑 `import linovelib`
+则失败。故构建脚本的验证步骤已改为**按应用真实方式**跑一次
+`python wpf_bridge.py --help`，而不是只验证依赖导入。
+
+相对路径的基准是 `runtime\python\`，故项目根为上两级。`._pth` 中的相对路径按
+「`._pth` 文件所在目录」解析，与 cwd 无关，故分发包被拷到任何位置都成立。
 
 ### 6.2 安装依赖
 
@@ -167,8 +183,10 @@ public static string FindPython(string root)
 2. 下载 python.org embeddable 3.10（版本与 `runtime/` 记录对齐）
 3. 解压、改写 `_pth`、bootstrap pip
 4. `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1` 安装 `requirements.txt`
-5. 拷贝源码（`linovelib/`、`comic/`、`main.py`、`wpf_bridge.py`、`README.md`）
-6. 输出体积报告
+5. 拷贝源码（`linovelib/`、`comic/`、`main.py`、`wpf_bridge.py`、`README.md`、
+   `tools/verify_dist.py`）
+6. 运行 `tools/verify_dist.py` 作为出厂闸门（见 §7.1）
+7. 输出体积报告
 
 脚本须**幂等**：可重复执行，已存在的 `runtime/` 可复用或按 `--force` 重建（脚本内为
 `-Force` 开关）。
@@ -177,6 +195,31 @@ public static string FindPython(string root)
 ANSI 代码页解码，脚本内的中文注释与提示会乱码，进而报出一连串 `Unexpected token` /
 `Missing closing '}'` 语法错误，脚本根本无法启动（首次执行即踩此坑）。
 `tests/test_bundled_runtime.py::test_build_script_has_utf8_bom` 锁定该约定。
+
+### 7.1 出厂自检 `tools/verify_dist.py`
+
+第 6 步的闸门。检查解释器来源、项目模块可导入（`linovelib`/`comic`/`main`/
+`wpf_bridge`）、数据目录名、桥接事件编码、Edge 探测；加 `--search 书名` 再做一次
+联网全链路实测。该脚本**随包发布**，用户可在目标机器上自己复验：
+
+```bat
+runtime\python\python.exe tools\verify_dist.py --search 败北女角太多了
+```
+
+**检查逻辑刻意写在 Python 里，而非 build_dist.ps1 内联**，原因有三（皆已实测）：
+
+1. PowerShell 5.1 会把原生命令的 stderr 逐行包成 `ErrorRecord`
+   （`NativeCommandError`），配合 `$ErrorActionPreference='Stop'` 会中止脚本——
+   **即便该命令退出码为 0**。而 `argparse` 的 `--help` 正是写到 stderr，必然踩中。
+2. 子进程输出在本机是 **GBK** 而非 UTF-8，内联 `-match '轻小说下载器'` 是在拿乱码
+   比对，永远不成立。
+3. 逻辑放在 `.py` 里可以单测，内联 PowerShell 不行。
+
+**一个必须小心的坑**：脚本按 `__file__` 向上定位根目录。若在仓库里执行
+`dist\tools\verify_dist.py`，ROOT 会变成**仓库根**，于是校验的是仓库而不是分发版
+——全绿也是假象（`PROJECT_ROOT` 会打出仓库路径）。故构建脚本调用的是分发包内
+那一份，且脚本自身检查「分发版根目录下是否存在 `runtime/python/python.exe`」
+以识别这种情形（仓库根没有 `runtime/`，会直接判失败）。
 
 ## 8. 版本一致性
 
@@ -224,6 +267,14 @@ dist/
 
 第 1 条是本次的核心验收项——它同时覆盖了此前暴露的两个问题
 （「exe 打不开」= 缺 .NET；「搜索不到」= 缺 playwright 依赖）。
+
+**当前达成情况**（在开发机 dist/ 上实测）：
+
+- 第 2 条 ✅ 已实测通过——用内置运行时跑 `verify_dist.py --search 败北女角太多了`
+  → `3095 | 败北女角太多了！`（17/17 项）。这正是当初因 302 重定向而失败的查询。
+- 第 1、3、4 条 ⏳ **尚未验证**，需要在真正没有 Python/.NET 的机器或虚拟机上做。
+  开发机装了 Anaconda 与 .NET SDK，环境不干净，无法据此断言「免装」成立。
+  迁移到干净机器后，先跑 `runtime\python\python.exe tools\verify_dist.py` 复验。
 
 ## 11. 明确不做
 
