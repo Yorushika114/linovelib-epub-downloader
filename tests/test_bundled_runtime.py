@@ -163,6 +163,21 @@ def test_verify_dist_is_shipped_in_dist():
     )
 
 
+def test_build_strips_root_pycache():
+    """分发版根目录不得残留 __pycache__。
+
+    构建脚本原先只在拷贝 linovelib/comic 时清理字节码，根目录那份（上次在 dist
+    内跑 Python 留下的）会被 Copy-Item -Force 带着一起留在包里。它含开发机路径，
+    且可能被优先加载，掩盖真正的源码问题。实测构建产物里确实存在该目录。
+    """
+    source = (ROOT / "tools" / "build_dist.ps1").read_text(encoding="utf-8")
+    assert "__pycache__" in source
+    # 清理必须覆盖分发版根目录，而不只是子包目录。
+    assert "$OutDir\\__pycache__" in source, (
+        "构建脚本未清理分发版根目录的 __pycache__。"
+    )
+
+
 def test_verify_dist_flags_missing_runtime():
     """自检必须能识别「这里不是分发版」。
 

@@ -177,6 +177,12 @@ $VerifyDst = Join-Path $OutDir 'tools'
 New-Item -ItemType Directory -Force -Path $VerifyDst | Out-Null
 Copy-Item -Force (Join-Path $Root 'tools\verify_dist.py') $VerifyDst
 
+# 清掉分发包里的字节码目录。根目录那份来自上一次在 dist 内运行 Python，上面的
+# Copy-Item -Force 不会删它；它含开发机路径，且可能被优先加载而掩盖真正的源码问题。
+foreach ($pyc in @("$OutDir\__pycache__", "$VerifyDst\__pycache__")) {
+    if (Test-Path $pyc) { Remove-Item -Recurse -Force $pyc -ErrorAction SilentlyContinue }
+}
+
 # 命令行入口：源码仓库的 download.bat 直接调用裸 `python`，拷进分发版会在无
 # Python 的机器上失败——那正是本次要解决的问题。故分发版另生成一份 bat，优先用
 # 内置运行时，找不到才回退 PATH 上的 python。
@@ -232,8 +238,15 @@ if ($LASTEXITCODE -ne 0) { throw "运行时依赖导入失败" }
 # PowerShell 5.1 会把子进程的 stderr 包成终止性 ErrorRecord（argparse 的 --help 正
 # 走 stderr），且子进程输出是 GBK 而非 UTF-8——内联比对中文必然误判。详见该脚本头注释。
 Write-Step "端到端自检：按应用真实方式验证"
-& $PyExe (Join-Path $OutDir 'tools\verify_dist.py')
+# -B：不要写 .pyc。自检会 import 项目模块，否则会在分发版根目录重新生成
+# __pycache__（第 5 步刚清掉的那份），把开发机路径带进包里。
+& $PyExe -B (Join-Path $OutDir 'tools\verify_dist.py')
 if ($LASTEXITCODE -ne 0) { throw "分发版自检未通过（详见上方输出）" }
+
+# 自检若因故仍留下字节码（例如漏了 -B），在此兜底清掉，保证产物干净。
+foreach ($pyc in @("$OutDir\__pycache__", "$OutDir\tools\__pycache__")) {
+    if (Test-Path $pyc) { Remove-Item -Recurse -Force $pyc -ErrorAction SilentlyContinue }
+}
 
 # --------------------------------------------------------------- 7. 报告
 Write-Host ""
