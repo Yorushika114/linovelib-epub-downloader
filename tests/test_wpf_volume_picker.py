@@ -252,3 +252,42 @@ def test_selection_count_refreshes_when_a_box_is_checked():
         body = cs.split(f"private void {handler}", 1)[1].split("\n    }", 1)[0]
         assert "SyncVolumesToBox" in body, f"{handler} 未同步卷号框。"
         assert overview in body, f"{handler} 未刷新概览计数。"
+
+
+def test_bulk_selection_is_batched_to_avoid_ui_stutter():
+    """全选/退出多选必须批量改勾选，不能逐行触发回调。
+
+    逐行赋 IsSelected 会让每行都发一次 PropertyChanged，每次回调都要跑一遍全表
+    LINQ 聚合 + 刷 TextBlock，合计 O(N²) 外加 N 次布局过程——卷一多就肉眼可见地卡，
+    这正是用户报的「切换多选时卡顿」。批量期间抑制回调，结束后只汇总一次。
+    """
+    cs = (ROOT / "wpf" / "LinovelibDesktop" / "MainWindow.xaml.cs").read_text(encoding="utf-8")
+
+    assert "SetAllSelected" in cs, "缺少批量勾选helper。"
+    # 两个批量入口（全选 / 退出多选）都要走批量 helper，而不是裸 foreach。
+    for method in ("ResetMultiSelect", "ResetComicMultiSelect",
+                   "SelectAllButton_Click", "ComicSelectAllButton_Click"):
+        body = cs.split(f"private void {method}", 1)[1].split("\n    }", 1)[0]
+        assert "SetAllSelected" in body, (
+            f"{method} 仍在逐行改勾选——会成为卡顿源。")
+
+    # 回调里必须有抑制开关，否则批量等于没做。
+    for handler, flag in (("VolumeRow_PropertyChanged", "_suspendVolumeSync"),
+                          ("ComicVolumeRow_PropertyChanged", "_suspendComicVolumeSync")):
+        body = cs.split(f"private void {handler}", 1)[1].split("\n    }", 1)[0]
+        assert flag in body and "return" in body, (
+            f"{handler} 未在批量期间提前返回。")
+
+
+def test_volume_toolbar_sits_left_of_the_filter_buttons():
+    """卷工具条要在「全部」左边——用户指定的位置。"""
+    xaml = (ROOT / "wpf" / "LinovelibDesktop" / "MainWindow.xaml").read_text(encoding="utf-8")
+    # 按各自的「展开日志」按钮切出所属头部：两页都有「章节队列」字样，
+    # 直接按标题 split 会两次都命中小说页。
+    for toolbar, first_filter, log_btn in (
+            ("VolumeToolbar", "AllFilterButton", "LogToggleButton"),
+            ("ComicVolumeToolbar", "ComicAllFilterButton", "ComicLogToggleButton")):
+        header = xaml.split(f'x:Name="{log_btn}"', 1)[0].rsplit('<Grid Margin="22,18,22,14">', 1)[-1]
+        assert f'x:Name="{toolbar}"' in header, f"{toolbar} 不在队列头部。"
+        assert header.index(f'x:Name="{toolbar}"') < header.index(f'x:Name="{first_filter}"'), (
+            f"{toolbar} 应排在「全部」按钮左边。")

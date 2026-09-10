@@ -42,6 +42,13 @@ public partial class MainWindow : Window
     private bool _multiSelect;
     private bool _comicMultiSelect;
 
+    // 批量改勾选时抑制逐行回调。
+    // 不加这个会卡：ResetMultiSelect/全选 逐行赋 IsSelected，每次赋值都触发
+    // VolumeRow_PropertyChanged → 一次全表 LINQ 聚合（O(N)）→ 两次 TextBlock 刷新；
+    // N 行就是 O(N²) 加上 N 次布局过程，卷多的书上肉眼可见地卡。
+    private bool _suspendVolumeSync;
+    private bool _suspendComicVolumeSync;
+
     public MainWindow()
     {
         InitializeComponent();
@@ -216,20 +223,41 @@ public partial class MainWindow : Window
     /// <summary>退出多选：取消勾选并复位开关（全选后取消切换会留下「假选中」）。</summary>
     private void ResetMultiSelect()
     {
-        foreach (var row in _volumeRows) row.IsSelected = false;
-        SyncVolumesToBox(_volumeRows, VolumesBox);
-        MultiSelectToggle.IsChecked = false;
+        SetAllSelected(_volumeRows, false, ref _suspendVolumeSync);
         _multiSelect = false;
+        MultiSelectToggle.IsChecked = false;
         ApplyMultiSelectVisibility();
+        UpdateVolumeOverview();
     }
 
     private void ResetComicMultiSelect()
     {
-        foreach (var row in _comicVolumeRows) row.IsSelected = false;
-        SyncVolumesToBox(_comicVolumeRows, ComicVolumesBox);
-        ComicMultiSelectToggle.IsChecked = false;
+        SetAllSelected(_comicVolumeRows, false, ref _suspendComicVolumeSync);
         _comicMultiSelect = false;
+        ComicMultiSelectToggle.IsChecked = false;
         ApplyMultiSelectVisibility();
+        UpdateComicVolumeOverview();
+    }
+
+    /// <summary>
+    /// 批量设置勾选状态：期间抑制逐行回调，结束后只做一次汇总。
+    /// </summary>
+    /// <remarks>
+    /// 逐行赋值会让每行都触发一次 PropertyChanged，每次都要跑一遍全表聚合 + 刷 TextBlock，
+    /// 合计 O(N²) 外加 N 次布局过程——卷一多就能看出卡顿。这里只算一次。
+    /// 退出多选是**取消全部勾选**，故不清空卷号框（见 SyncVolumesToBox 的说明）。
+    /// </remarks>
+    private static void SetAllSelected(IEnumerable<VolumeRow> rows, bool selected, ref bool suspend)
+    {
+        suspend = true;
+        try
+        {
+            foreach (var row in rows) row.IsSelected = selected;
+        }
+        finally
+        {
+            suspend = false;
+        }
     }
 
     private void ExitMultiSelect()
@@ -250,14 +278,16 @@ public partial class MainWindow : Window
 
     private void SelectAllButton_Click(object sender, RoutedEventArgs e)
     {
-        foreach (var row in _volumeRows) row.IsSelected = true;
+        SetAllSelected(_volumeRows, true, ref _suspendVolumeSync);
         SyncVolumesToBox(_volumeRows, VolumesBox);
+        UpdateVolumeOverview();
     }
 
     private void ComicSelectAllButton_Click(object sender, RoutedEventArgs e)
     {
-        foreach (var row in _comicVolumeRows) row.IsSelected = true;
+        SetAllSelected(_comicVolumeRows, true, ref _suspendComicVolumeSync);
         SyncVolumesToBox(_comicVolumeRows, ComicVolumesBox);
+        UpdateComicVolumeOverview();
     }
 
     /// <summary>勾选优先：把当前勾中的卷号（逗号分隔）写回「卷号」框，用户仍可手改。</summary>
@@ -272,6 +302,8 @@ public partial class MainWindow : Window
     private void VolumeRow_PropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
         if (e.PropertyName != nameof(VolumeRow.IsSelected)) return;
+        // 批量期间只赋值，汇总放到批次结束后做一次（见 SetAllSelected）。
+        if (_suspendVolumeSync) return;
         SyncVolumesToBox(_volumeRows, VolumesBox);
         UpdateVolumeOverview();
     }
@@ -279,6 +311,7 @@ public partial class MainWindow : Window
     private void ComicVolumeRow_PropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
         if (e.PropertyName != nameof(VolumeRow.IsSelected)) return;
+        if (_suspendComicVolumeSync) return;
         SyncVolumesToBox(_comicVolumeRows, ComicVolumesBox);
         UpdateComicVolumeOverview();
     }
