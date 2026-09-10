@@ -12,6 +12,7 @@ linovelib 会对「非浏览器请求」返回降级/打乱的内容：段数变
 从而可以原样替换进 downloader / main，而无需改动那些模块。
 """
 
+import re
 from urllib.parse import quote
 from .fetcher import Fetcher
 
@@ -65,11 +66,32 @@ _COUNT = """
 """
 
 
+def _require_playwright():
+    """构造期校验 playwright 是否可用，缺失时立刻抛带安装指引的 ImportError。
+
+    底层 `import playwright` 原本只在首次渲染的 `_ensure_page()` 里发生（懒加载，
+    避免纯编号下载被迫依赖浏览器）。但这样 `RenderFetcher(...)` 构造总会成功，
+    调用方（main._resolve_identifier / wpf_bridge.run_resolve）用来判定「浏览器不可
+    用 → 走站外引擎兜底」的 `browser = None` 分支永远不会触发：缺依赖时构造出的
+    对象看似可用，直到搜索那一刻才抛 ImportError，被上层 try/except 吞掉后变成
+    「搜索无结果」。新克隆的机器没执行 `playwright install` 时正是这个表现。
+    这里把「有没有 playwright」提前到构造期判定，让降级路径按设计生效。
+    """
+    try:
+        import playwright  # noqa: F401
+    except ImportError as e:
+        raise ImportError(
+            "未安装 playwright，无法使用真实浏览器搜索/渲染。"
+            "请执行：pip install -r requirements.txt && playwright install msedge"
+        ) from e
+
+
 class RenderFetcher:
     """用系统浏览器渲染正文页；图片仍走底层 requests 抓取器。"""
 
     def __init__(self, image_fetcher=None, headless=False, channel="msedge",
                  wait_after=2.5, timeout=90000):
+        _require_playwright()
         self.img = image_fetcher or Fetcher()
         self.retries = getattr(self.img, "retries", 6)
         self.headless = headless
@@ -146,6 +168,12 @@ class RenderFetcher:
         导航必须用 networkidle 等待（让客户端 JS 把结果请求发出并落地），且【不要】再追加
         额外 sleep 或 wait_for_selector——实测一加等待就拿回空壳。返回页含 div.search-result-list
         结果项，由 resolver.parse_search_results 解析（本站自站搜索，参考无关）。
+
+        【精确命中会 302 到小说页】：当查询词能唯一定位一本书时（如完整书名），站点
+        不渲染结果列表，而是直接把 /S6/?searchkey=… 重定向到 /novel/{id}.html。此时页面
+        里没有 search-result-list，按结果列表解析会得到「0 条」，并被上层误判成「查无此书」
+        而不再兜底。故这里检测落点：若被送到小说详情页，就合成一条候选（编号取自 URL，
+        标题取自页面 <title>），保持「搜到 1 条」的语义与结果列表路径一致。
         """
         page = self._ensure_page()
         try:
@@ -155,7 +183,38 @@ class RenderFetcher:
             pass
         url = search_url or ("https://www.linovelib.com/S6/?searchkey=" + quote(name))
         page.goto(url, wait_until="networkidle", timeout=self.timeout)
-        return page.content()
+        html = page.content()
+        redirected = self._redirect_hit(page.url, html)
+        if redirected is not None:
+            # 把重定向落点合成为一条结果项，复用 _parse_search_results 的结果契约。
+            nid, title = redirected
+            return (f'<div class="search-result-list"><h2 class="tit">'
+                    f'<a href="/novel/{nid}.html">{title}</a></h2></div>')
+        return html
+
+    @staticmethod
+    def _redirect_hit(final_url, html):
+        """搜索结果页被 302 送到小说详情页时，返回 (编号, 标题)；否则 None。
+
+        只有落点形如 /novel/{id}.html 才算「精确命中直达」；停在 /S6/ 的结果页
+        （含 0 条）一律返回 None，交由常规结果列表解析处理，避免把「查无此书」误判成命中。
+
+        标题取详情页 <title> 的首段（站点格式「书名_作者作品_出版社_哩哩轻小说」），
+        这样上层 is_exact_match 仍能标记「书名吻合」，与结果列表路径行为一致。
+        """
+        m = re.search(r"/novel/(\d+)\.html", final_url or "")
+        if not m:
+            return None
+        t = re.search(r"<title[^>]*>(.*?)</title>", html or "",
+                      re.S | re.I)
+        raw = t.group(1) if t else ""
+        title = raw.split("_", 1)[0].strip()
+        # <title> 里可能的 HTML 实体/标签清掉，只留纯文本。
+        title = re.sub(r"<[^>]+>", "", title)
+        for ent, ch in (("&amp;", "&"), ("&lt;", "<"), ("&gt;", ">"),
+                        ("&quot;", '"'), ("&#39;", "'"), ("&nbsp;", " ")):
+            title = title.replace(ent, ch)
+        return m.group(1), title.strip()
 
     def get_bytes(self, url, **kw):
         return self.img.get_bytes(url, **kw)
