@@ -154,6 +154,63 @@ $env:PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = '1'
 if ($LASTEXITCODE -ne 0) { throw "依赖安装失败" }
 Remove-Item Env:\PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD -ErrorAction SilentlyContinue
 
+# ------------------------------------------------- 4b. 剔除非运行时依赖
+# requirements.txt 里的 pytest 只服务于仓库内的 tests/：应用代码不 import 它，出厂
+# 自检 tools/verify_dist.py 也明确不依赖它。留在分发包里除了白占体积，还会让分发版
+# 看着像个开发环境。
+#
+# 只删**确认没有第二家在用**的包。实测（在 site-packages 里 grep import）：
+#   · exceptiongroup —— filelock 在 Python < 3.11 上真的会 import 它，而 filelock
+#     是 tldextract → DrissionPage 的依赖。本运行时是 3.10，删了漫画侧会炸。
+#   · pygments —— ebooklib 的 sourcecode 插件会 import 它。
+#   · colorama —— click 在 Windows 上需要它（DrissionPage 依赖 click）。
+#   · packaging / tomli —— 被多处引用，且体量微不足道。
+# 所以这里只卸 pytest 本身，外加它**独占**的两个依赖 pluggy / iniconfig。
+#
+# `_pytest` **不能**写进卸载列表：它不是一个独立的发行包（PEP 508 也禁止下划线开头
+# 的包名），pip 会直接 `Invalid requirement` 报错。它是 pytest 发行版自带的私有包目录，
+# 卸 pytest 时源码会被一并删掉——但事后生成的 .pyc 不在 pip 的 RECORD 里，会留下一个
+# 空壳目录，所以下面还要按目录再扫一遍。
+#
+# pip / setuptools / wheel 必须留着——本脚本每次构建（包括复用 runtime 时）都要跑
+# 上面的 `pip install`，卸掉 pip 会让下一次构建直接失败。
+#
+# 另删 Scripts\ 下的 .exe：它们是各包的控制台包装（pytest.exe / py.test.exe /
+# wheel.exe …），应用一律以 `python -m` 或库调用方式使用，没有代码去执行它们。
+# **注意不要碰 playwright\driver\node.exe**——那是 playwright 驱动浏览器用的真实
+# 组件，漫画抓取依赖它。
+#
+# 这里**不要**用 `2>&1 | Out-Null` 重定向 stderr：PS 5.1 会把原生命令的 stderr 逐行
+# 包成 NativeCommandError，在 $ErrorActionPreference='Stop' 下直接中止整个构建。这个
+# 坑踩过一次——卸载列表里混进 `_pytest`，pip 报 Invalid requirement，于是构建在第 5 步
+# 「拷贝源码」之前就断了，留下一个残包。
+Write-Step "剔除非运行时依赖（pytest 等测试期包与控制台包装）"
+$ScriptsDir = Join-Path $RuntimeDir 'Scripts'
+$BeforeMB = if (Test-Path $ScriptsDir) { Get-DirSizeMB $ScriptsDir } else { 0 }
+& $PyExe -m pip uninstall -y pytest pluggy iniconfig --disable-pip-version-check | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "卸载测试期依赖失败（退出码 $LASTEXITCODE）" }
+
+# pip 只删它 RECORD 里记着的文件。实测卸完 pytest 后还留着两样：
+#   · site-packages\_pytest\__pycache__\terminalprogress.cpython-310-pytest-9.1.1.pyc
+#     —— 事后生成的字节码不在 RECORD 里，pip 不管；
+#   · site-packages\.pytest_cache\
+#     —— 用这个解释器跑过一次 pytest 就会留下。
+# 两者都是「这看着像个开发环境」的痕迹，按目录直接清掉。删整个 `_pytest` 目录是安全的：
+# 它是 pytest 的私有包，除 pytest 自己外没有任何运行时依赖 import 它（已 grep 全
+# site-packages 确认，命中的全在 pytest/ 与 _pytest/ 内部）。
+$SitePackages = Join-Path $RuntimeDir 'Lib\site-packages'
+foreach ($stale in @('_pytest', '.pytest_cache')) {
+    $p = Join-Path $SitePackages $stale
+    if (Test-Path $p) { Remove-Item -Recurse -Force $p -ErrorAction SilentlyContinue }
+}
+
+if (Test-Path $ScriptsDir) {
+    Get-ChildItem $ScriptsDir -Filter '*.exe' -ErrorAction SilentlyContinue |
+        Remove-Item -Force -ErrorAction SilentlyContinue
+}
+$AfterMB = if (Test-Path $ScriptsDir) { Get-DirSizeMB $ScriptsDir } else { 0 }
+Write-Host ("    Scripts/ {0} MB -> {1} MB" -f $BeforeMB, $AfterMB)
+
 # ------------------------------------------------------------ 5. 拷贝源码
 Write-Step "拷贝源码"
 foreach ($item in @('linovelib', 'comic')) {

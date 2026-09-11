@@ -96,16 +96,34 @@ def test_volume_row_fields_match_the_csharp_dto():
     0/空串）。这里钉死字段名，避免哪天改了 Python 侧键名而界面「卷号全是 0」。
     """
     import json
+    import locale
+    import os
     import subprocess
     import sys
 
+    # 子进程必须带着「干净的」环境跑：WPF 启动桥接时并不设 PYTHONIOENCODING
+    # （见 DownloaderBridge.CreateBridgeStartInfo），子进程于是按**系统区域编码**写
+    # stdout，C# 侧不设 StandardOutputEncoding，也就按同一个编码读回来。
+    # 若原样继承本进程的环境，一旦外壳里设了 PYTHONIOENCODING=utf-8，桥接会改吐
+    # UTF-8 字节，用区域编码解就直接 UnicodeDecodeError——那是测试环境的差异，不是
+    # 桥接回归。这里主动对齐 WPF 的启动方式，把这个变量挡在外面。
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONIOENCODING"}
     proc = subprocess.run(
         [sys.executable, str(ROOT / "wpf_bridge.py"), "--catalog", "3095"],
-        capture_output=True, timeout=300, cwd=str(ROOT))
-    # 桥接 stdout 是系统区域编码（中文 Windows = GBK），与搜索通路一致；
-    # 若这里改成 utf-8 解码会 UnicodeDecodeError，那才是真回归。
-    rows = [json.loads(line) for line in proc.stdout.decode("gbk").splitlines() if line.strip()]
+        capture_output=True, timeout=300, cwd=str(ROOT), env=env)
+    # 照系统区域编码解，而不是写死 "gbk"：写死的话，在英文 Windows 上（子进程吐
+    # cp1252）这条用例同样会挂，而那不是契约问题。
+    rows = [json.loads(line)
+            for line in proc.stdout.decode(locale.getpreferredencoding(False)).splitlines()
+            if line.strip()]
     volumes = [r for r in rows if r["kind"] == "volume"]
+    # 这条用例会真的去打站点的目录页，所以**依赖网络**。必须区分两种「一卷都没有」：
+    # 站点这次把我们拒了（catalog_error，重跑就好），和字段契约真的坏了（一行都没输出）。
+    # 不加区分的话，一次限流会被读成「卷行字段名改坏了」，照着错的方向查半天。
+    errors = [r for r in rows if r["kind"] == "catalog_error"]
+    if errors and not volumes:
+        raise AssertionError(
+            f"取目录被站点拒绝（重跑通常即可，不是契约回归）：{errors[0].get('message')}")
     assert volumes, "未取到任何卷行（网络或站点结构变化）"
 
     required = {"kind", "index", "title", "chapters", "vid"}

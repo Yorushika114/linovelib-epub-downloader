@@ -118,9 +118,10 @@ def build_epub(novel, out_path, cover_data=None):
     # 先由 ebooklib 写出（保证 OPF/NCX/Nav/mimetype 正确），再对每个 XHTML
     # 注入 lang=zh-CN、<title> 与样式表链接，并包住封面图。ebooklib 的
     # EpubHtml 只会生成 `lang="en"` 与空 `<head/>`，无法直接控制 head。
-    # 临时文件写到项目缓存目录 _tmp_dl（已 gitignore），避免在 download/ 下残留
-    # .epub.tmp。该目录与输出同盘，_finalize_xhtml 跨目录读取后写入目标文件没有原子性
-    # 依赖，安全；即使中断留下残留，也在缓存目录而不会污染最终输出目录。
+    # ebooklib 先写到这里（缓存目录 _tmp_dl，已 gitignore），再交给 _finalize_xhtml 重写版式
+    # 落到目标。两者可以在不同盘：_finalize_xhtml 自己会在**目标同目录**再开一个临时文件
+    # 并 os.replace 过去，原子性由那一步保证，与本文件放哪儿无关。中断留下的残留都在
+    # 缓存目录（本文件）或由 _finalize_xhtml 自行清掉（目标目录那个），不会污染成品目录。
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=str(CACHE_DIR), suffix=".epub.tmp")
     os.close(fd)
@@ -137,12 +138,14 @@ def build_epub(novel, out_path, cover_data=None):
                 time.sleep(0.5)
         # 目标 .epub 可能被阅读器/calibre 打开（写共享被拒 → PermissionError，无法覆盖）。
         # 此时不要静默失败，改写到「同名 + 空格 + 序号」的替身文件，并明确告知用户。
+        # 走带重试的版本：杀软在同一目录新建的 .epub.tmp 上也会锁一瞬，直接判「被占用」
+        # 会凭空造出替身文件，用户下次重跑还找不到原文件名而整本重下。
         dest = out_path
         try:
-            _finalize_xhtml(tmp, out_path, title_map)
+            _finalize_xhtml_retrying(tmp, out_path, title_map)
         except PermissionError:
             dest = _alternate_path(out_path)
-            _finalize_xhtml(tmp, dest, title_map)
+            _finalize_xhtml_retrying(tmp, dest, title_map)
             print(f"目标文件已被其他程序占用（可能是阅读器正在打开这个 epub），已另存为：{dest}")
         return dest
     finally:
@@ -163,28 +166,69 @@ def build_epub(novel, out_path, cover_data=None):
 
 def _alternate_path(path):
     """目标被占用时，返回一个不会被占用的替身路径：`书名.epub` -> `书名. 1.epub`、
-    `书名. 2.epub`……直到写成功为止。"""
+    `书名. 2.epub`……直到找到一个空位为止。
+
+    判空用 os.path.exists 而不是自己 open 试：原先只 catch FileNotFoundError，而候选
+    路径**本身被别的程序占用**时 open 抛的是 PermissionError，它会直接穿出这个循环，
+    替身机制在自己该起作用的那种情况下失效。
+    """
     p = pathlib.Path(path)
     for i in range(1, 1000):
         cand = p.with_name(f"{p.stem}. {i}{p.suffix}")
-        try:
-            with open(cand, "rb"):
-                pass
-        except FileNotFoundError:
+        if not os.path.exists(cand):
             return cand
     return p.with_name(f"{p.stem}. {int(time.time())}{p.suffix}")
 
 
+def _finalize_xhtml_retrying(src, dst, title_map, attempts=8):
+    """`_finalize_xhtml` 的带重试版本。
+
+    这条路径上会新建两个文件，都可能被 Windows Defender 的实时扫描短暂锁住：缓存目录
+    里那个（调用方已自行重试 8 次）和 **dst 同目录**下的这一个。后者原先没有重试，一次
+    杀软瞬时锁就会被读成「目标 epub 正被阅读器占用」，于是白白改写成一个「书名. 1.epub」
+    替身——用户下次重跑找不到原文件名，还会整本重下。
+
+    真正的占用（阅读器确实开着这个文件）重试多少次都还是 PermissionError，所以这个循环
+    不会掩盖「该走替身」的那种情况。
+    """
+    for attempt in range(attempts):
+        try:
+            _finalize_xhtml(src, dst, title_map)
+            return
+        except PermissionError:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(0.5)
+
+
 def _finalize_xhtml(src, dst, title_map):
-    zin = zipfile.ZipFile(src)
-    zout = zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED)
-    with zin, zout:
-        for item in zin.infolist():
-            name = item.filename
-            data = zin.read(name)
-            if name.endswith(".xhtml"):
-                data = _inject_head(name, data, title_map)
-            zout.writestr(item, data)
+    """把临时 epub 按标准版式重写后**原子地**放到 dst。
+
+    先写到 dst 同目录下的临时文件、再 os.replace 过去：同目录即同卷，replace 是原子的。
+    直接往 dst 写的问题在于，合成中途被打断（关窗、崩溃、取消）会留下一个半截 epub，
+    而「已存在就跳过」的闸门会把它当成下过的书永久跳过——用户重跑多少次都拿不到书。
+
+    失败时清掉半截的临时文件再抛：调用方据此走「目标被占用 → 另存为替身」的分支。
+    """
+    dst = pathlib.Path(dst)
+    fd, tmp = tempfile.mkstemp(dir=str(dst.parent), suffix=".epub.tmp")
+    os.close(fd)
+    try:
+        with zipfile.ZipFile(src) as zin, \
+                zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zout:
+            for item in zin.infolist():
+                name = item.filename
+                data = zin.read(name)
+                if name.endswith(".xhtml"):
+                    data = _inject_head(name, data, title_map)
+                zout.writestr(item, data)
+        os.replace(tmp, dst)
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def _inject_head(name, content, title_map):

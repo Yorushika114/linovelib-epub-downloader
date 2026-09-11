@@ -2,6 +2,7 @@ import sys
 import re
 import pathlib
 import dataclasses
+import zipfile
 from linovelib.fetcher import Fetcher, CloudflareBlockedError
 from linovelib.resolver import resolve_id, fetch_novel, ResolveError
 from linovelib.catalog import (parse_catalog, parse_volume_chapters,
@@ -24,11 +25,79 @@ for _stream in (sys.stdout, sys.stderr):
         pass
 
 
+# 文件名里不能出现的字符。Windows 上 ":" 尤其致命——它把「名字:后半.epub」解释成
+# 「文件『名字』+ 隐藏数据流『后半.epub』」，后果有两个，都不显眼：
+#   · 资源管理器里只看到一个 0 字节、没有扩展名的怪文件，用户以为这卷没下下来；
+#   · Path.exists() 却会命中那条流、返回 True，「已存在就跳过」的闸门于是把这一卷
+#     **永久跳过**，重跑多少次都拿不到书。
+# 实测 download/小说/Re从零开始的异世界生活/ 下就躺着这样一条 40 MB 的隐藏流，
+# 卷标签是 "Re:zeropedia 公式书"。
+_ILLEGAL_FILENAME_CHARS = '<>:"/\\|?*\n\t'
+
+
+def _strip_illegal(text):
+    """去掉文件名非法字符。与 _sanitize 的区别是**不兜底**：空串就是空串。"""
+    for c in _ILLEGAL_FILENAME_CHARS:
+        text = text.replace(c, "")
+    return text.strip()
+
+
 def _sanitize(name):
-    bad = '<>:"/\\|?*\n\t'
-    for c in bad:
-        name = name.replace(c, "")
-    return name.strip() or "novel"
+    return _strip_illegal(name) or "novel"
+
+
+def _volume_filename(title_safe, suffix):
+    """拼「书名 + 卷序后缀」的 EPUB 文件名，非法字符在这里清掉。
+
+    不把清洗放进 _volume_suffix：同一个后缀还要当界面上的卷标签用（见循环里的
+    vol_label），在那里把 "Re:zeropedia 公式书" 显示成 "Rezeropedia 公式书" 是另一回事，
+    不该为了迁就文件名牺牲显示。
+
+    合法后缀下结果与旧写法逐字节一致（后缀本就以空格开头，strip 后再补回同一个空格），
+    故已经下好的书不会被误判成新任务重下。
+    """
+    label = _strip_illegal(suffix)
+    return f"{title_safe} {label}.epub" if label else f"{title_safe}.epub"
+
+
+def _is_complete_epub(path):
+    """已存在的目标是否是一本**完整**的 epub。
+
+    合成中途被打断（关窗、崩溃、取消）会留下半截文件。只看 exists() 的话，这一卷会被
+    当成「已经下过」永久跳过，用户始终拿不到书。ZIP 的中央目录记在文件末尾，被截断的
+    文件里找不到它，is_zipfile 会返回 False。
+    """
+    try:
+        return zipfile.is_zipfile(path)
+    except OSError:
+        return False
+
+
+def _backfill_skipped_bodies(volumes, skipped_indexes, nid, fetcher, tmpdir):
+    """给「逐卷 EPUB 已存在、本次因而被跳过」的卷补下正文，返回补完后仍为空的章节。
+
+    --merge 的合并本是用内存里的 Chapter 对象合成的，而被跳过的卷本次进程一次
+    download_chapter 都没跑过，chapter.html 还是空串。不补就合并，用户拿到的是一本
+    每章只有标题、没有正文的书，退出码却是 0——正是本文件要根除的那种「静默产出残次品」。
+
+    逐卷路径容忍个别章节下载失败（那是一次真实的下载错误，成品仍有价值），这里不同：
+    这些正文**从来没被尝试下载过**，补不齐说明网络确实有问题。此时宁可不出合并本，
+    也不出一本空书——逐卷 EPUB 都还在，用户重跑一次即可。
+    """
+    still_empty = []
+    for vi, vol in enumerate(volumes, start=1):
+        if vi not in skipped_indexes:
+            continue
+        for ch in vol.chapters:
+            if ch.html:
+                continue
+            try:
+                download_chapter(ch, nid, fetcher, tmpdir)
+            except Exception as e:
+                print(f"  [ERR] 合并本补下章节失败：{ch.title or ch.id}（{e}）")
+            if not ch.html:
+                still_empty.append(ch)
+    return still_empty
 
 
 def _volume_suffix(volumes, book_title):
@@ -191,10 +260,15 @@ def main(argv=None, *, observer=None, cancel_event=None):
         return 2
 
     # 检测到目标 EPUB 已存在且未 --force：所有下载方式的通用跳过。这里放在最前，
-    # 单文件 --out 已存在时零网络请求直接返回；默认逐卷/合并本则在下方逐卷检查。
-    if args.out and pathlib.Path(args.out).exists() and not args.force:
-        print(f"已存在，跳过：{args.out}")
-        return 0
+    # 单文件 --out 已完整时零网络请求直接返回；默认逐卷/合并本则在下方逐卷检查。
+    # 判据与下方两处闸门一致，用的是「是不是一本完整的 epub」而非 exists()：半截文件
+    # （合成中途被打断、或用户手放的同名占位）若被当成「下过了」，就会永久跳过。
+    if args.out and not args.force:
+        if _is_complete_epub(args.out):
+            print(f"已存在，跳过：{args.out}")
+            return 0
+        if pathlib.Path(args.out).exists():
+            print(f"已存在但不完整，重新生成：{args.out}")
 
     # 卷页(vol_XXX.html)偶发慢响应，默认 timeout=15 会频繁超时浪费重试；提到 30s
     # 让慢但正常的响应直接成功（页面 26.8s 成功过）。章节页都快，30s 不影响它们。
@@ -358,10 +432,15 @@ def main(argv=None, *, observer=None, cancel_event=None):
     for vi, vol in enumerate(volumes, start=1):
         out = None
         if folder is not None:
-            out = folder / f"{title_safe}{_volume_suffix([vol], novel.title)}.epub"
-            if out.exists() and not args.force:
-                _skip(out)
-                skipped_volume_indexes.add(vi)
+            out = folder / _volume_filename(
+                title_safe, _volume_suffix([vol], novel.title))
+            if not args.force:
+                if _is_complete_epub(out):
+                    _skip(out)
+                    skipped_volume_indexes.add(vi)
+                elif out.exists():
+                    # 上次合成到一半被打断留下的半截文件：不能当成「下过了」。
+                    print(f"已存在但不完整，重新生成：{out}")
         volume_outputs[vi] = out
 
     total_chapters = sum(
@@ -430,10 +509,26 @@ def main(argv=None, *, observer=None, cancel_event=None):
 
     # 多卷 & 默认目录：不再询问。仅当显式 --merge 时才额外补一份整本合并 EPUB。
     if folder is not None and len(volumes) > 1 and args.merge:
-        out = folder / f"{title_safe}{_volume_suffix(volumes, novel.title)}.epub"
-        if out.exists() and not args.force:
+        out = folder / _volume_filename(
+            title_safe, _volume_suffix(volumes, novel.title))
+        if not args.force and _is_complete_epub(out):
             _skip(out)
         else:
+            if out.exists() and not args.force:
+                print(f"已存在但不完整，重新生成：{out}")
+            # 合并本的正文来自内存里的 Chapter 对象，而被跳过的卷（逐卷 EPUB 已存在）
+            # 本次一页都没抓过，chapter.html 还是空串。直接合并会静默产出一本每章只有
+            # 标题的空书，还报成功——先把这些卷的正文补齐再合并。
+            empty = _backfill_skipped_bodies(
+                volumes, skipped_volume_indexes, nid, fetcher, tmpdir)
+            if empty:
+                print(f"合并本有 {len(empty)} 章正文为空（补下失败），已放弃生成合并本，"
+                      f"以免产出一本只有标题的书；逐卷 EPUB 不受影响，可稍后重跑。")
+                if failed:
+                    print("以下章节未能下载：")
+                    for cid, title in failed:
+                        print(f"  {cid} {title}")
+                return 1
             _build(_novel_subset(novel, volumes, "merged"), out,
                    _vol_cover(volumes[0]) if volumes else None)
 
