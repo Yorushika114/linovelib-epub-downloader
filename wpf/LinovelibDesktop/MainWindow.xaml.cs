@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Windows.Data;
@@ -49,6 +50,12 @@ public partial class MainWindow : Window
     private bool _suspendVolumeSync;
     private bool _suspendComicVolumeSync;
 
+    // —— 退出收尾 ——
+    // OnClosing 是 async void：先 e.Cancel = true 拦住这次关闭，异步停下载 + 清缓存，
+    // 做完再重新 Close()。没有这两面旗子，重入的关闭请求会重复触发一遍收尾。
+    private bool _shutdownStarted;
+    private bool _shutdownDone;
+
     public MainWindow()
     {
         InitializeComponent();
@@ -62,6 +69,79 @@ public partial class MainWindow : Window
         UpdateTaskOverview();
         ShowChapterMode();
         ShowComicChapterMode();
+    }
+
+    // ==================== 退出收尾 ====================
+
+    /// <summary>
+    /// 关窗时停掉下载并清一次缓存。
+    ///
+    /// 缓存目录 _tmp_dl 放的全是可再生的中间产物（章节插图暂存、卷页 HTML、EPUB 临时
+    /// 文件），不清它会一直涨——实测开发机上已堆到 918MB，其中 909MB 是 6489 张**只写
+    /// 不读**的章节插图（downloader 写盘，但 epub_builder 用的是内存里的 asset.data）。
+    ///
+    /// 顺带修掉「下载中点 X」：此前没有任何关闭处理，Python 桥接进程会被留成孤儿，
+    /// 继续往即将被删的缓存目录里写。
+    /// </summary>
+    protected override async void OnClosing(CancelEventArgs e)
+    {
+        base.OnClosing(e);      // 先让 Closing 事件照常走完（目前无订阅者，防的是以后有人加）
+        if (e.Cancel) return;   // 有订阅者否决了这次关闭：尊重它
+
+        if (_shutdownDone)
+        {
+            return;
+        }
+
+        // 重入检查必须在**询问之前**：收尾那 4 秒里用户很可能再点一次 X，那时不该被再问
+        // 一遍（第一次已经答过「确定」了）。放在询问之后的话，每点一次就多弹一个对话框。
+        if (_shutdownStarted)
+        {
+            e.Cancel = true;    // 收尾还没做完，继续拦住这次关闭
+            return;
+        }
+
+        if (_bridge.IsRunning)
+        {
+            var answer = MessageBox.Show(this,
+                "下载仍在进行。退出会中断当前下载，并清理缓存目录。\n\n确定要退出吗？",
+                "确认退出", MessageBoxButton.OKCancel, MessageBoxImage.Warning);
+            if (answer != MessageBoxResult.OK)
+            {
+                e.Cancel = true;
+                return;
+            }
+        }
+
+        e.Cancel = true;                // 先拦住：下面的收尾是异步的，做完再真正关
+        _shutdownStarted = true;
+
+        // 收尾要 3~4 秒，这期间窗口仍然活着。不禁用的话用户还能再点一次「开始下载」，
+        // 那个新起的桥接进程会被随后的 Close() 抛下变成孤儿——正是本次要修掉的那个问题。
+        IsEnabled = false;
+        StatusText.Text = "正在停止下载并清理缓存…";
+        try
+        {
+            await _bridge.StopAsync(TimeSpan.FromSeconds(4));
+        }
+        catch (Exception)
+        {
+            // StopAsync 自身不抛；这里只是兜底，不让收尾卡住关窗。
+        }
+
+        try
+        {
+            // 放到线程池：实测 900 MB / 6800 个文件的缓存要 3~4 秒，同步做会把 UI 线程
+            // 整个卡住——连上面那行「正在清理」都刷不出来，看起来就像关窗卡死。
+            await Task.Run(() => CacheCleaner.Clean(ProjectPaths.FindRoot()));
+        }
+        catch (Exception)
+        {
+            // 找不到项目根或清理失败都不该挡住退出：缓存留着，下次启动/退出再清。
+        }
+
+        _shutdownDone = true;
+        Close();
     }
 
     // ==================== 卷选择 ====================

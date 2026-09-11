@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using System.Threading;
 using LinovelibDesktop.Models;
 
 namespace LinovelibDesktop.Services;
@@ -9,6 +10,8 @@ namespace LinovelibDesktop.Services;
 public sealed class DownloaderBridge
 {
     private Process? _process;
+    /// <summary>正在跑的搜索 / 取目录进程。它同样会拉起 Edge，关窗时要一起收掉（见 StopAsync）。</summary>
+    private Process? _resolveProcess;
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
     private const string EventPrefix = "@@LINOVELIB_EVENT@@";
     private const int ResolveTimeoutSeconds = 60;
@@ -50,25 +53,122 @@ public sealed class DownloaderBridge
 
     private async Task<int> RunDownloadAsync(ProcessStartInfo startInfo, Action<DownloadEventDto> onEvent, Action<string> onLog)
     {
-        _process = new Process { StartInfo = startInfo };
-        if (!_process.Start()) throw new InvalidOperationException("无法启动 Python 下载桥接进程。");
+        var process = new Process { StartInfo = startInfo };
+        _process = process;
+        try
+        {
+            if (!process.Start()) throw new InvalidOperationException("无法启动 Python 下载桥接进程。");
+        }
+        catch
+        {
+            // Start 失败会留下一个「构造过、但从未成功启动」的 Process。之后读它的
+            // HasExited 会抛 InvalidOperationException（No process is associated with
+            // this object），而 IsRunning / RequestCancel 正是靠 HasExited 判断的——
+            // 异常会从 async void 的 OnClosing 里逃出去，把后面的「清理缓存」整段跳过。
+            // 故失败即清空字段并释放。
+            if (ReferenceEquals(_process, process)) _process = null;
+            process.Dispose();
+            throw;
+        }
 
-        var stdoutTask = ReadEventsAsync(_process, onEvent, onLog);
-        var stderrTask = ReadErrorsAsync(_process, onEvent, onLog);
-        await Task.WhenAll(stdoutTask, stderrTask, _process.WaitForExitAsync());
-        var exitCode = _process.ExitCode;
-        _process.Dispose();
-        _process = null;
-        return exitCode;
+        try
+        {
+            var stdoutTask = ReadEventsAsync(process, onEvent, onLog);
+            var stderrTask = ReadErrorsAsync(process, onEvent, onLog);
+            await Task.WhenAll(stdoutTask, stderrTask, process.WaitForExitAsync());
+            return process.ExitCode;
+        }
+        finally
+        {
+            // 收尾必须走 finally：中间任何一步抛异常，字段都会一直指着一个已死的进程。
+            if (ReferenceEquals(_process, process)) _process = null;
+            process.Dispose();
+        }
     }
 
     public void RequestCancel()
     {
-        if (_process is { HasExited: false })
+        var process = _process;
+        if (!IsAlive(process)) return;
+        try
         {
-            _process.StandardInput.WriteLine("cancel");
-            _process.StandardInput.Flush();
+            process!.StandardInput.WriteLine("cancel");
+            process.StandardInput.Flush();
         }
+        catch (Exception)
+        {
+            // 管道已关（进程正在退）：忽略。
+        }
+    }
+
+    /// <summary>当前是否有**下载**子进程在跑（关窗时据此决定要不要先问用户）。</summary>
+    public bool IsRunning => IsAlive(_process);
+
+    /// <summary>进程是否还活着。null、已 Dispose、或从未成功启动都算「没在跑」。</summary>
+    private static bool IsAlive(Process? process)
+    {
+        if (process is null) return false;
+        try
+        {
+            return !process.HasExited;
+        }
+        catch (Exception)
+        {
+            // 构造过但从未启动、或已 Dispose 的 Process：HasExited 抛 InvalidOperationException。
+            // 它显然不在跑——这里绝不能把异常漏出去，调用方是关窗路径。
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// 关窗时结束下载：先请 Python 侧优雅取消（在**章节边界**生效，见 main.py 对
+    /// cancel_event 的检查），限时未退再连子进程一起杀掉（Playwright/Edge 一并结束）。
+    ///
+    /// 强杀本身现在是**安全**的：成品 EPUB 由 _finalize_xhtml 原子落盘（目标同目录临时文件
+    /// + os.replace），砍在合成中途只会留下一个 .epub.tmp，不会出现半截成品；跳过闸门也已
+    /// 改成校验「是不是一本完整的 epub」，半截文件不会再被当成下过的书永久跳过。
+    /// 仍先给优雅期是为了三件事：让界面收到 cancelled 事件（而不是把「被强杀」显示成下载
+    /// 失败）、让当前章读完不白下、以及让桥接自己收掉 Playwright/Edge（强杀进程树偶有漏网
+    /// 的浏览器子进程）。这些是「更好」而非「必须」，故超时后照杀不误。
+    /// </summary>
+    public async Task StopAsync(TimeSpan gracefulTimeout)
+    {
+        // 搜索 / 取目录这次也拉起了 Python + Edge，只是不写任何文件；关窗后没理由留着它们
+        // （最长要到解析超时 60 秒才自己退）。它们没有「下到一半」的状态，无需优雅期。
+        TryKill(_resolveProcess);
+
+        // 抓本地引用：RunDownloadAsync 在 await 之后会把字段置 null，直接读字段会撞空。
+        var process = _process;
+        if (process is null) return;
+
+        if (IsAlive(process))
+        {
+            try
+            {
+                process.StandardInput.WriteLine("cancel");
+                process.StandardInput.Flush();
+            }
+            catch (Exception)
+            {
+                // 管道已关（进程正在退）：直接进强杀分支。
+            }
+
+            using var timeout = new CancellationTokenSource(gracefulTimeout);
+            try
+            {
+                await process.WaitForExitAsync(timeout.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                // 当前章还没读完，没等到优雅退出，下面强杀。
+            }
+            catch (Exception)
+            {
+                // 进程已被 RunDownloadAsync 收尾（Dispose 之后再等会抛）：照常往下走。
+            }
+        }
+
+        TryKill(process);
     }
 
     /// <summary>仅按书名解析候选列表（不下载），供 WPF 先做书名筛选，再进入卷数/下载。</summary>
@@ -115,6 +215,8 @@ public sealed class DownloaderBridge
 
         using var process = new Process { StartInfo = startInfo };
         if (!process.Start()) throw new InvalidOperationException("无法启动 Python 搜索桥接进程。");
+        // 登记到字段：关窗时 StopAsync 要能连它一起结束（搜索/取目录同样会拉起 Edge）。
+        _resolveProcess = process;
 
         // 给整个解析过程加硬性时限：站内搜索 / 站外引擎（Bing、DDG）或 Edge 关闭偶发挂起时，
         // 不能让 SearchButton 一直被禁用导致「无法继续搜索」。超时则终止整棵进程树并返回空。
@@ -167,15 +269,20 @@ public sealed class DownloaderBridge
             TryKill(process);
             throw;
         }
+        finally
+        {
+            if (ReferenceEquals(_resolveProcess, process)) _resolveProcess = null;
+        }
         return results.Where(r => r.Kind == keepKind).ToList();
     }
 
-    /// <summary>把还活着的解析进程连子进程一起杀掉（Playwright/Edge 等子进程一并结束）。</summary>
-    private static void TryKill(Process process)
+    /// <summary>把还活着的进程连子进程一起杀掉（Playwright/Edge 等子进程一并结束）。</summary>
+    private static void TryKill(Process? process)
     {
+        if (!IsAlive(process)) return;
         try
         {
-            if (!process.HasExited) process.Kill(entireProcessTree: true);
+            process!.Kill(entireProcessTree: true);
         }
         catch
         {
