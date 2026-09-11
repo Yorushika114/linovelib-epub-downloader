@@ -116,6 +116,69 @@ def test_build_script_runs_real_bridge_check():
     )
 
 
+def test_build_script_strips_dev_only_packages_but_keeps_pip():
+    """分发包里不该带 pytest 这套开发工具，但 pip 必须留着。
+
+    requirements.txt 含 pytest（只服务仓库内的 tests/），应用代码与出厂自检都不
+    import 它，留在包里除了白占体积，还会连带 _pytest / py / pluggy / iniconfig
+    一串，让分发版看着像个开发环境。
+
+    反过来说，pip / setuptools / wheel 绝不能被顺手卸掉：本脚本每次构建（包括复用
+    runtime 时）都要跑一次 `pip install -r requirements.txt`，卸掉 pip 会让**下一次
+    构建**直接失败。同理，清理必须排在安装**之后**——否则 requirements.txt 里的
+    pytest 会在下一步被重新装回来，白清一场。
+    """
+    source = (ROOT / "tools" / "build_dist.ps1").read_text(encoding="utf-8")
+    assert source.index("pip install -r") < source.index("pip uninstall"), (
+        "清理测试期依赖必须在安装依赖之后，否则 pytest 会被重新装回来。"
+    )
+
+    start = source.index("uninstall -y") + len("uninstall -y")
+    end = source.index("--disable-pip-version-check", start)
+    packages = source[start:end].split()
+
+    assert "pytest" in packages, "构建脚本未清理 pytest。"
+    assert "_pytest" not in packages, (
+        "_pytest 不是独立发行包（PEP 508 禁止下划线开头的包名），写进卸载列表会让 pip "
+        "报 Invalid requirement 并中止整个构建。它是 pytest 自带的私有包目录，卸 pytest "
+        "时源码会被一并删掉，残留的字节码另行按目录清理。"
+    )
+    # pip 只删 RECORD 里记着的文件：_pytest 下事后生成的 .pyc 与 .pytest_cache/ 都会
+    # 留下来。实测卸完 pytest 后这两样还在包里。
+    assert "'_pytest'" in source and "'.pytest_cache'" in source, (
+        "构建脚本未清理 _pytest / .pytest_cache 残留目录。"
+    )
+    for keep in ("pip", "setuptools", "wheel"):
+        assert keep not in packages, (
+            f"不能卸载 {keep}：下一次构建的 pip install 依赖它。"
+        )
+    # 这几个虽然是被 pytest 拉进来的，但另有真正的运行时用户在 import，
+    # 见构建脚本里的实测记录。删了会让漫画/电子书功能在分发包里静默失效。
+    for keep in ("exceptiongroup", "pygments", "colorama", "packaging", "tomli"):
+        assert keep not in packages, (
+            f"不能卸载 {keep}：除 pytest 外还有运行时依赖在用它。"
+        )
+
+
+def test_build_script_never_deletes_playwrights_node_driver():
+    """清理 Scripts\\*.exe 时必须限定在那个目录，别碰 playwright 的 node.exe。
+
+    playwright 驱动浏览器靠的是 Lib\\site-packages\\playwright\\driver\\node.exe，
+    那是**真实运行时组件**（漫画抓取依赖它），不是打包时顺手带进来的控制台壳子。
+    一旦清理写成递归删 site-packages 下的 *.exe，漫画功能会在分发包里静默失效。
+    """
+    source = (ROOT / "tools" / "build_dist.ps1").read_text(encoding="utf-8")
+
+    at = source.index("-Filter '*.exe'")
+    line = source[source.rindex("\n", 0, at) + 1 : source.index("\n", at)]
+    assert "$ScriptsDir" in line, "清理 .exe 的 Get-ChildItem 未限定在 Scripts/ 目录。"
+    assert "-Recurse" not in line, "不应递归删除 —— 会扫到 site-packages 里的真实组件。"
+
+    for ln in source.splitlines():
+        if "Remove-Item" in ln and "node.exe" in ln:
+            raise AssertionError(f"脚本删除了 playwright 的 node 驱动：{ln}")
+
+
 def test_verify_dist_script_exists_and_checks_bridge():
     """自检脚本必须真的去 import 桥接与 main，而不只是打印几句话。"""
     script = (ROOT / "tools" / "verify_dist.py").read_text(encoding="utf-8")

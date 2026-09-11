@@ -4,6 +4,15 @@ namespace LinovelibDesktop.Services;
 
 public static class ProjectPaths
 {
+    /// <summary>
+    /// 缓存目录名，与 Python 侧 linovelib/paths.py 的 CACHE_DIR 必须一致。
+    /// 名字只能有这一处来源，跨语言的一致性由 tests/test_cache_cleanup.py 断言守着
+    /// （两边各改各的，会让退出清理清到别处去或清了个空）。
+    /// </summary>
+    public const string CacheDirectoryName = "_tmp_dl";
+
+    public static string FindCacheDir(string root) => Path.Combine(root, CacheDirectoryName);
+
     public static string FindRoot()
     {
         foreach (var start in new[] { AppContext.BaseDirectory, Environment.CurrentDirectory })
